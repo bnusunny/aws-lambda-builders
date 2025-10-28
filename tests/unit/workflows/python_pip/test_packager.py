@@ -112,6 +112,7 @@ class TestGetLambdaAbi(object):
     def test_get_lambda_abi_python313(self):
         assert "cp314" == get_lambda_abi("python3.14")
 
+
 class TestPythonPipDependencyBuilder(object):
     def test_can_call_dependency_builder(self, osutils):
         mock_dep_builder = mock.Mock(spec=DependencyBuilder)
