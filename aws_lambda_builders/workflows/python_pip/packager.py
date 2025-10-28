@@ -103,8 +103,8 @@ class PythonPipDependencyBuilder(object):
 
         :type runtime: str
         :param runtime: Python version to build dependencies for. This can
-            either be python3.8, python3.9, python3.10, python3.11, python3.12, python3.13 or python3.14. These are currently the
-            only supported values.
+            either be python3.8, python3.9, python3.10, python3.11, python3.12, python3.13 or python3.14. 
+            These are currently the only supported values.
 
         :type osutils: :class:`lambda_builders.utils.OSUtils`
         :param osutils: A class used for all interactions with the
