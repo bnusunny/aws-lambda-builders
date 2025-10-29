@@ -98,7 +98,7 @@ class TestPythonPipWorkflow(TestCase):
         )
 
         if self.runtime in ("python3.14"):
-            self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux2014_x86_64", "manylinux1_x86_64"])
+            self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux_2_27_x86_64", "manylinux_2_28_x86_64"])
             expected_files = self.test_data_files.union({"numpy", "numpy-2.3.4.dist-info", "numpy.libs"})
         elif self.runtime in ("python3.12", "python3.13"):
             self.check_architecture_in("numpy-2.1.2.dist-info", ["manylinux2014_x86_64", "manylinux1_x86_64"])
@@ -131,7 +131,7 @@ class TestPythonPipWorkflow(TestCase):
             )
 
             if self.runtime in ("python3.14"):
-                self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux2014_x86_64", "manylinux1_x86_64"])
+                self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux_2_27_x86_64", "manylinux_2_28_x86_64"])
                 expected_files = self.test_data_files.union({"numpy", "numpy-2.3.4.dist-info", "numpy.libs"})
             elif self.runtime in ("python3.12", "python3.13"):
                 self.check_architecture_in("numpy-2.1.2.dist-info", ["manylinux2014_x86_64", "manylinux1_x86_64"])
@@ -190,7 +190,9 @@ class TestPythonPipWorkflow(TestCase):
         output_files = set(os.listdir(self.artifacts_dir))
         self.assertEqual(expected_files, output_files)
 
-        if self.runtime in ("python3.12", "python3.13"):
+        if self.runtime in ("python3.14"):
+            self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux_2_27_aarch64", "manylinux_2_28_aarch64"])
+        elif self.runtime in ("python3.12", "python3.13"):
             self.check_architecture_in("numpy-2.1.2.dist-info", ["manylinux2014_aarch64"])
         elif self.runtime in ("python3.10", "python3.11"):
             self.check_architecture_in("numpy-1.23.5.dist-info", ["manylinux2014_aarch64"])
@@ -469,7 +471,10 @@ class TestPythonPipWorkflow(TestCase):
             options={"parent_python_packages": parent_package},
         )
 
-        if self.runtime in ("python3.12", "python3.13"):
+        if self.runtime in ("python3.14"):
+            self.check_architecture_in("numpy-2.3.4.dist-info", ["manylinux_2_27_x86_64", "manylinux_2_28_x86_64"])
+            expected_dependencies = {"numpy", "numpy-2.3.4.dist-info", "numpy.libs"}
+        elif self.runtime in ("python3.12", "python3.13"):
             self.check_architecture_in("numpy-2.1.2.dist-info", ["manylinux2014_x86_64", "manylinux1_x86_64"])
             expected_dependencies = {"numpy", "numpy-2.1.2.dist-info", "numpy.libs"}
         elif self.runtime in ("python3.10", "python3.11"):

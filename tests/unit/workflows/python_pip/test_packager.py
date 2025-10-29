@@ -109,7 +109,7 @@ class TestGetLambdaAbi(object):
     def test_get_lambda_abi_python313(self):
         assert "cp313" == get_lambda_abi("python3.13")
 
-    def test_get_lambda_abi_python313(self):
+    def test_get_lambda_abi_python314(self):
         assert "cp314" == get_lambda_abi("python3.14")
 
 
