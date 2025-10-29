@@ -666,8 +666,20 @@ class SDistMetadataFetcher(object):
 
     def _get_pkg_info_filepath(self, package_dir):
         setup_py = self._osutils.joinpath(package_dir, "setup.py")
+        
+        # First, try to ensure setuptools is available for the subprocess
+        # In Python 3.12+, setuptools might not be available by default
+        try:
+            # Check if setuptools is available in the current environment
+            import subprocess
+            check_cmd = [self.python_exe, "-c", "import setuptools"]
+            result = subprocess.run(check_cmd, capture_output=True, timeout=10)
+            if result.returncode != 0:
+                LOG.debug("setuptools not available in Python environment. PKG-INFO fallback will be used if setup.py fails.")
+        except Exception as e:
+            LOG.debug("Could not check setuptools availability: %s", e)
+        
         script = self._SETUPTOOLS_SHIM % setup_py
-
         cmd = [self.python_exe, "-c", script, "--no-user-cfg", "egg_info", "--egg-base", "egg-info"]
         egg_info_dir = self._osutils.joinpath(package_dir, "egg-info")
         self._osutils.makedirs(egg_info_dir)
@@ -678,6 +690,10 @@ class SDistMetadataFetcher(object):
         info_contents = self._osutils.get_directory_contents(egg_info_dir)
         if p.returncode != 0:
             LOG.debug("Non zero rc (%s) from the setup.py egg_info command: %s", p.returncode, stderr)
+            # Check if the error is due to missing setuptools/distutils in Python 3.12+
+            if b"setuptools" in stderr or b"distutils" in stderr:
+                LOG.debug("Setup.py failed likely due to missing setuptools/distutils in Python 3.12+. Trying fallback PKG-INFO.")
+        
         if info_contents:
             pkg_info_path = self._osutils.joinpath(egg_info_dir, info_contents[0], "PKG-INFO")
         else:
@@ -685,8 +701,32 @@ class SDistMetadataFetcher(object):
             # should be available right in the top level directory of the sdist
             # in the case where the egg_info command fails.
             pkg_info_path = self._get_fallback_pkg_info_filepath(package_dir)
+            LOG.debug("Using fallback PKG-INFO path: %s", pkg_info_path)
+        
         if not self._osutils.file_exists(pkg_info_path):
-            raise UnsupportedPackageError(self._osutils.basename(package_dir))
+            LOG.debug("PKG-INFO file not found at: %s", pkg_info_path)
+            # Try additional fallback locations that might exist in real sdist packages
+            additional_fallbacks = [
+                self._osutils.joinpath(package_dir, "PKG-INFO"),  # Already tried by _get_fallback_pkg_info_filepath
+                self._osutils.joinpath(package_dir, "*.egg-info", "PKG-INFO"),  # Sometimes egg-info exists without our command
+            ]
+            
+            # Look for any .egg-info directories that might already exist
+            try:
+                package_contents = self._osutils.get_directory_contents(package_dir)
+                for item in package_contents:
+                    if item.endswith('.egg-info') and self._osutils.directory_exists(self._osutils.joinpath(package_dir, item)):
+                        potential_pkg_info = self._osutils.joinpath(package_dir, item, "PKG-INFO")
+                        if self._osutils.file_exists(potential_pkg_info):
+                            LOG.debug("Found PKG-INFO in existing .egg-info directory: %s", potential_pkg_info)
+                            pkg_info_path = potential_pkg_info
+                            break
+            except Exception as e:
+                LOG.debug("Error while searching for existing .egg-info directories: %s", e)
+            
+            if not self._osutils.file_exists(pkg_info_path):
+                LOG.warning("Unable to find PKG-INFO file for package in %s. This may be due to missing setuptools/distutils in Python 3.12+ or an incomplete sdist package.", package_dir)
+                raise UnsupportedPackageError(self._osutils.basename(package_dir))
         return pkg_info_path
 
     def _get_fallback_pkg_info_filepath(self, package_dir: str) -> str:
