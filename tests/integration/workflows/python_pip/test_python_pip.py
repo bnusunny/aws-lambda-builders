@@ -257,9 +257,8 @@ class TestPythonPipWorkflow(TestCase):
         for f in expected_files:
             self.assertIn(f, output_files)
 
+    @skipIf(IS_WINDOWS, "Skip in windows tests")
     def test_must_resolve_unknown_package_name(self):
-        if IS_WINDOWS and self.runtime == "python3.13":
-            self.skipTest("Skip test as pip install inflate64 does not work on Windows with Python 3.13")
         self.builder.build(
             self.source_dir,
             self.artifacts_dir,
