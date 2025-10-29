@@ -665,12 +665,13 @@ class SDistMetadataFetcher(object):
 
     def _get_pkg_info_filepath(self, package_dir):
         setup_py = self._osutils.joinpath(package_dir, "setup.py")
-        
+
         # First, try to ensure setuptools is available for the subprocess
         # In Python 3.12+, setuptools might not be available by default
         try:
             # Check if setuptools is available in the current environment
             import subprocess
+
             check_cmd = [self.python_exe, "-c", "import setuptools"]
             result = subprocess.run(check_cmd, capture_output=True, timeout=10, check=False)
             if result.returncode != 0:
@@ -680,7 +681,7 @@ class SDistMetadataFetcher(object):
                 )
         except Exception as e:
             LOG.debug("Could not check setuptools availability: %s", e)
-        
+
         script = self._SETUPTOOLS_SHIM % setup_py
         cmd = [self.python_exe, "-c", script, "--no-user-cfg", "egg_info", "--egg-base", "egg-info"]
         egg_info_dir = self._osutils.joinpath(package_dir, "egg-info")
@@ -698,7 +699,7 @@ class SDistMetadataFetcher(object):
                     "Setup.py failed likely due to missing setuptools/distutils in Python 3.12+. "
                     "Trying fallback PKG-INFO."
                 )
-        
+
         if info_contents:
             pkg_info_path = self._osutils.joinpath(egg_info_dir, info_contents[0], "PKG-INFO")
         else:
@@ -707,27 +708,25 @@ class SDistMetadataFetcher(object):
             # in the case where the egg_info command fails.
             pkg_info_path = self._get_fallback_pkg_info_filepath(package_dir)
             LOG.debug("Using fallback PKG-INFO path: %s", pkg_info_path)
-        
+
         if not self._osutils.file_exists(pkg_info_path):
             LOG.debug("PKG-INFO file not found at: %s", pkg_info_path)
-            
+
             # Look for any .egg-info directories that might already exist
             try:
                 package_contents = self._osutils.get_directory_contents(package_dir)
                 for item in package_contents:
-                    if item.endswith('.egg-info') and self._osutils.directory_exists(
+                    if item.endswith(".egg-info") and self._osutils.directory_exists(
                         self._osutils.joinpath(package_dir, item)
                     ):
                         potential_pkg_info = self._osutils.joinpath(package_dir, item, "PKG-INFO")
                         if self._osutils.file_exists(potential_pkg_info):
-                            LOG.debug(
-                                "Found PKG-INFO in existing .egg-info directory: %s", potential_pkg_info
-                            )
+                            LOG.debug("Found PKG-INFO in existing .egg-info directory: %s", potential_pkg_info)
                             pkg_info_path = potential_pkg_info
                             break
             except Exception as e:
                 LOG.debug("Error while searching for existing .egg-info directories: %s", e)
-            
+
             if not self._osutils.file_exists(pkg_info_path):
                 LOG.warning(
                     "Unable to find PKG-INFO file for package in %s. "

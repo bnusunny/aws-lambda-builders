@@ -962,10 +962,7 @@ class TestSdistMetadataFetcher(object):
     _SETUPTOOLS = "from setuptools import setup"
     _DISTUTILS = "from distutils.core import setup"
     _BOTH = (
-        "try:\n"
-        "    from setuptools import setup\n"
-        "except ImportError:\n"
-        "    from distutils.core import setup\n"
+        "try:\n" "    from setuptools import setup\n" "except ImportError:\n" "    from distutils.core import setup\n"
     )
 
     _SETUP_PY = "%s\n" "setup(\n" '    name="%s",\n' '    version="%s"\n' ")\n"
