@@ -7,6 +7,22 @@ import os
 import platform
 import shutil
 import subprocess
+from typing import List, Optional
+
+# sam-cli's ExperimentalFlag.NodejsMonorepo: its config key crosses the boundary as this string,
+# in the experimental_flags list the workflow is constructed with
+EXPERIMENTAL_FLAG_NODEJS_MONOREPO = "experimentalNodejsMonorepo"
+
+
+def is_nodejs_monorepo_support_enabled(experimental_flags: Optional[List[str]]) -> bool:
+    """
+    Is the caller opted in to the npm monorepo handling?
+
+    Gates the build-in-source behaviour a monorepo needs - honouring the lockfile npm will actually
+    read, and linking the artifacts to the tree npm hoisted them into - so a release can carry both
+    while the default path stays exactly as it was.
+    """
+    return bool(experimental_flags) and EXPERIMENTAL_FLAG_NODEJS_MONOREPO in experimental_flags
 
 
 class OSUtils(object):

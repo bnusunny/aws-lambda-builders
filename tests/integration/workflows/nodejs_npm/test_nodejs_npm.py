@@ -1,4 +1,5 @@
 import itertools
+import json
 import logging
 import os
 import shutil
@@ -11,6 +12,8 @@ from parameterized import parameterized
 from aws_lambda_builders.builder import LambdaBuilder
 from aws_lambda_builders.exceptions import WorkflowFailedError
 from aws_lambda_builders.supported_runtimes import NODEJS_RUNTIMES
+from aws_lambda_builders.workflows.nodejs_npm.npm import SubprocessNpm
+from aws_lambda_builders.workflows.nodejs_npm.utils import OSUtils
 from tests.testing_utils import read_link_without_junction_prefix
 
 logger = logging.getLogger("aws_lambda_builders.workflows.nodejs_npm.workflow")
@@ -305,6 +308,153 @@ class TestNodejsNpmWorkflow(TestCase):
         expected_files = {"package.json", "included.js", "node_modules"}
         output_files = set(os.listdir(self.artifacts_dir))
         self.assertEqual(expected_files, output_files)
+
+    @parameterized.expand(SUPPORTED_RUNTIMES)
+    def test_build_in_source_with_removed_dependencies_and_a_lockfile(self, runtime):
+        # a project with a lockfile installs the locked versions, and still drops a dependency that was
+        # removed from the manifest even though the lockfile it reads still lists it
+        source_dir = os.path.join(self.temp_testdata_dir, "npm-deps-with-lockfile")
+        lockfile_path = os.path.join(source_dir, "package-lock.json")
+        with open(lockfile_path, "rb") as lockfile:
+            original_lockfile = lockfile.read()
+
+        self.builder.build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "package.json"),
+            runtime=runtime,
+            build_in_source=True,
+            experimental_flags=["experimentalNodejsMonorepo"],
+        )
+
+        source_node_modules = os.path.join(source_dir, "node_modules")
+        self.assertIn("minimal-request-promise", set(os.listdir(source_node_modules)))
+        installed_manifest = os.path.join(source_node_modules, "minimal-request-promise", "package.json")
+        with open(installed_manifest) as manifest:
+            # the lockfile pins 1.3.0 while the manifest allows ^1.3.0
+            self.assertEqual(json.load(manifest)["version"], "1.3.0")
+
+        # the install runs in the developer's own directory, so it must leave their lockfile untouched -
+        # including the `ms` devDependency entry that `--omit=dev` keeps out of node_modules
+        with open(lockfile_path, "rb") as lockfile:
+            self.assertEqual(lockfile.read(), original_lockfile)
+
+        shutil.copy2(
+            os.path.join(self.temp_testdata_dir, "no-deps", "package.json"),
+            os.path.join(source_dir, "package.json"),
+        )
+
+        self.builder.build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "package.json"),
+            runtime=runtime,
+            build_in_source=True,
+            experimental_flags=["experimentalNodejsMonorepo"],
+        )
+
+        self.assertNotIn("minimal-request-promise", set(os.listdir(source_node_modules)))
+        # still untouched with the lockfile now out of date: the manifest no longer lists the dependency
+        with open(lockfile_path, "rb") as lockfile:
+            self.assertEqual(lockfile.read(), original_lockfile)
+
+    @parameterized.expand(SUPPORTED_RUNTIMES)
+    def test_build_in_source_with_a_version_1_lockfile(self, runtime):
+        # npm 6 wrote lockfileVersion 1 and npm 7+ has to migrate it in memory before it can reify, which
+        # is a different write path from reifying a version 2 or 3 lockfile directly. The locked versions
+        # still have to win, and the developer's file still has to come back untouched - in its original
+        # format, not migrated in place.
+        source_dir = os.path.join(self.temp_testdata_dir, "npm-deps-with-v1-lockfile")
+        lockfile_path = os.path.join(source_dir, "package-lock.json")
+        with open(lockfile_path, "rb") as lockfile:
+            original_lockfile = lockfile.read()
+
+        self.builder.build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "package.json"),
+            runtime=runtime,
+            build_in_source=True,
+            experimental_flags=["experimentalNodejsMonorepo"],
+        )
+
+        source_node_modules = os.path.join(source_dir, "node_modules")
+        installed_manifest = os.path.join(source_node_modules, "minimal-request-promise", "package.json")
+        with open(installed_manifest) as manifest:
+            # the lockfile pins 1.3.0 while the manifest allows ^1.3.0, so this version can only come
+            # from npm having read the version 1 lockfile
+            self.assertEqual(json.load(manifest)["version"], "1.3.0")
+
+        with open(lockfile_path, "rb") as lockfile:
+            self.assertEqual(lockfile.read(), original_lockfile)
+
+    @parameterized.expand(SUPPORTED_RUNTIMES)
+    def test_build_in_source_drops_already_installed_dev_dependencies(self, runtime):
+        # building in source installs into the developer's own directory, which normally already holds the
+        # dev dependencies their own `npm install` put there. Those must not reach the artifacts, which for
+        # this workflow are a symlink to the same node_modules.
+        source_dir = os.path.join(self.temp_testdata_dir, "npm-deps-with-lockfile")
+        source_node_modules = os.path.join(source_dir, "node_modules")
+
+        # the developer's own install: the `ms` devDependency is present before the build. Go through
+        # SubprocessNpm rather than a bare `npm`, since the executable is `npm.cmd` on Windows.
+        SubprocessNpm(OSUtils()).run(["install", "--silent", "--no-audit", "--no-fund"], cwd=source_dir)
+        self.assertIn("ms", set(os.listdir(source_node_modules)))
+
+        self.builder.build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "package.json"),
+            runtime=runtime,
+            build_in_source=True,
+        )
+
+        installed = set(os.listdir(source_node_modules))
+        self.assertNotIn("ms", installed)
+        self.assertIn("minimal-request-promise", installed)
+        self.assertEqual(set(os.listdir(os.path.join(self.artifacts_dir, "node_modules"))), installed)
+
+    @parameterized.expand(SUPPORTED_RUNTIMES)
+    def test_build_in_source_with_a_local_dependency_and_a_lockfile(self, runtime):
+        # a lockfile written by a plain `npm install` records a file: dependency as a link entry
+        # ("resolved": "../npm-deps", "link": true), which is the tree --install-links exists to override.
+        # Reading a lockfile and passing --install-links used to be mutually exclusive here, because every
+        # build-in-source install ran with --no-package-lock, so this combination needs pinning: the local
+        # dependency has to land as a real directory, or the artifacts ship a symlink pointing outside them.
+        source_dir = os.path.join(self.temp_testdata_dir, "with-local-dependency-and-lockfile")
+        lockfile_path = os.path.join(source_dir, "package-lock.json")
+        with open(lockfile_path, "rb") as lockfile:
+            original_lockfile = lockfile.read()
+
+        self.builder.build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "package.json"),
+            runtime=runtime,
+            build_in_source=True,
+            experimental_flags=["experimentalNodejsMonorepo"],
+        )
+
+        source_node_modules = os.path.join(source_dir, "node_modules")
+        local_dependency = os.path.join(source_node_modules, "local-dependency")
+        # --install-links wins over the lockfile's link entry: a real directory holding the package's files
+        self.assertFalse(os.path.islink(local_dependency))
+        self.assertTrue(os.path.isdir(local_dependency))
+        self.assertTrue(os.path.isfile(os.path.join(local_dependency, "included.js")))
+
+        installed_manifest = os.path.join(source_node_modules, "minimal-request-promise", "package.json")
+        with open(installed_manifest) as manifest:
+            # the lockfile pins 1.3.0 while the manifest allows ^1.3.0, so the lockfile was read even
+            # though --install-links was also in effect
+            self.assertEqual(json.load(manifest)["version"], "1.3.0")
+
+        with open(lockfile_path, "rb") as lockfile:
+            self.assertEqual(lockfile.read(), original_lockfile)
 
     @parameterized.expand(SUPPORTED_RUNTIMES)
     def test_build_in_source_with_removed_dependencies(self, runtime):
