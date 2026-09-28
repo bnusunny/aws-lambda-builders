@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Optional
 
+from aws_lambda_builders import utils
 from aws_lambda_builders.actions import ActionFailedError, BaseAction, Purpose
 from aws_lambda_builders.utils import extract_tarfile
 from aws_lambda_builders.workflows.nodejs_npm.npm import NpmExecutionError, SubprocessNpm
@@ -372,3 +373,91 @@ class NodejsNpmTestAction(NodejsNpmInstallOrUpdateBaseAction):
 
         except NpmExecutionError as ex:
             raise ActionFailedError(str(ex))
+
+
+class NodejsNpmLinkDependencyClosureAction(BaseAction):
+    """
+    A Lambda Builder Action that links only this function's own dependencies into the artifacts directory.
+
+    Used when npm installed somewhere other than the function's directory, which is what npm does for a
+    workspaces monorepo: it hoists every workspace package's dependencies into one node_modules at the
+    monorepo root. Linking that whole directory would ship every sibling function's dependencies too, so
+    this asks npm which packages this function actually resolves and links those under their own names.
+    """
+
+    NAME = "NpmLinkDependencyClosure"
+    DESCRIPTION = "Linking this function's dependencies into the artifacts directory"
+    PURPOSE = Purpose.LINK_SOURCE
+
+    def __init__(self, install_dir, project_root, artifacts_dir, subprocess_npm, osutils):
+        """
+        Parameters
+        ----------
+        install_dir : str
+            the directory npm ran in, whose project's closure is wanted
+        project_root : str
+            the directory npm installed into, linked whole if the closure cannot be resolved
+        artifacts_dir : str
+            an existing (writable) directory where node_modules is assembled
+        subprocess_npm : aws_lambda_builders.workflows.nodejs_npm.npm.SubprocessNpm
+            An instance of the NPM process wrapper
+        osutils : aws_lambda_builders.workflows.nodejs_npm.utils.OSUtils
+            An instance of OS Utilities for file manipulation
+        """
+        super(NodejsNpmLinkDependencyClosureAction, self).__init__()
+        self._install_dir = install_dir
+        self._project_root = project_root
+        self._artifacts_dir = artifacts_dir
+        self._subprocess_npm = subprocess_npm
+        self._osutils = osutils
+
+    def execute(self):
+        closure = self._subprocess_npm.resolve_dependency_closure(self._install_dir)
+        destination = os.path.join(self._artifacts_dir, "node_modules")
+
+        if closure is None:
+            # no answer from npm is no basis for leaving anything out, and an over-complete node_modules
+            # still runs; link the whole installed tree instead
+            LOG.debug("NODEJS linking all of %s into the artifacts", self._project_root)
+            utils.create_symlink_or_copy(os.path.join(self._project_root, "node_modules"), destination)
+            return
+
+        for package_dir in self._outermost_packages(closure):
+            try:
+                name = self._osutils.parse_json(os.path.join(package_dir, "package.json"))["name"]
+            except (OSError, ValueError, KeyError) as ex:
+                # a directory npm named but that carries no readable manifest cannot be placed under a
+                # name, and guessing one from the path is how a package lands where node will not find it
+                raise ActionFailedError(f"Cannot read the package name of {package_dir}: {ex}")
+
+            link_path = os.path.join(destination, *name.split("/"))
+            os.makedirs(os.path.dirname(link_path), exist_ok=True)
+            utils.create_symlink_or_copy(package_dir, link_path)
+
+    def _outermost_packages(self, closure):
+        """
+        Keep the packages that need their own entry in node_modules.
+
+        npm reports the project itself, which is not one of its own dependencies, and it reports a nested
+        copy of a package that a dependency pins to a different version. A nested copy must stay where it
+        is - hoisting it would shadow the top-level version for every other caller - and it is already
+        reachable through the dependency that contains it, so only the outermost paths are linked.
+        """
+        # Every comparison below goes through normcase, never the raw path: these paths are npm's
+        # spelling while project_root and install_dir are the build's, and on Windows two spellings
+        # differing only in case name the same directory. An unmatched project root would be linked as
+        # if it were one of its own dependencies, and an unrecognised nested copy would be hoisted to
+        # the top level, shadowing the version every other caller resolves. The original paths are what
+        # gets linked, so only the comparisons are normalised. No-op off Windows.
+        paths = [os.path.realpath(path) for path in closure]
+        excluded = {os.path.normcase(os.path.realpath(d)) for d in (self._project_root, self._install_dir)}
+        candidates = [path for path in paths if os.path.normcase(path) not in excluded]
+
+        def is_nested_in_another(path):
+            key = os.path.normcase(path)
+            return any(
+                key != os.path.normcase(other) and key.startswith(os.path.normcase(other) + os.sep)
+                for other in candidates
+            )
+
+        return [path for path in candidates if not is_nested_in_another(path)]

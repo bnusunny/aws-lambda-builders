@@ -1,10 +1,15 @@
 import itertools
+import json
+import os
+import shutil
+import tempfile
 from unittest import TestCase
-from unittest.mock import patch, call
+from unittest.mock import MagicMock, patch, call
 from parameterized import parameterized
 
 from aws_lambda_builders.actions import ActionFailedError
 from aws_lambda_builders.workflows.nodejs_npm.actions import (
+    NodejsNpmLinkDependencyClosureAction,
     NodejsNpmPackAction,
     NodejsNpmInstallAction,
     NodejsNpmrcAndLockfileCopyAction,
@@ -14,6 +19,7 @@ from aws_lambda_builders.workflows.nodejs_npm.actions import (
     NodejsNpmTestAction,
 )
 from aws_lambda_builders.workflows.nodejs_npm.npm import NpmExecutionError
+from aws_lambda_builders.workflows.nodejs_npm.utils import OSUtils
 
 
 class TestNodejsNpmPackAction(TestCase):
@@ -273,3 +279,109 @@ class TestNodejsNpmTestAction(TestCase):
             action.execute()
 
         self.assertEqual(raised.exception.args[0], "NPM Failed: boom!")
+
+
+class TestNodejsNpmLinkDependencyClosureAction(TestCase):
+    """
+    the action places real directories under names npm reports, so these tests use a real temporary tree
+    """
+
+    def setUp(self):
+        self.osutils = OSUtils()
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, True)
+        self.subprocess_npm = MagicMock()
+        self.artifacts_dir = os.path.join(self.tmp_dir, "artifacts")
+        os.makedirs(self.artifacts_dir)
+        self.root = os.path.join(self.tmp_dir, "monorepo")
+        self.install_dir = os.path.join(self.root, "endpoints", "fn")
+
+    def _package(self, relative_path, name):
+        path = os.path.join(self.root, *relative_path.split("/"))
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "package.json"), "w") as manifest:
+            json.dump({"name": name, "version": "1.0.0"}, manifest)
+        return path
+
+    def _action(self):
+        return NodejsNpmLinkDependencyClosureAction(
+            install_dir=self.install_dir,
+            project_root=self.root,
+            artifacts_dir=self.artifacts_dir,
+            subprocess_npm=self.subprocess_npm,
+            osutils=self.osutils,
+        )
+
+    def _linked(self):
+        node_modules = os.path.join(self.artifacts_dir, "node_modules")
+        found = set()
+        for entry in os.listdir(node_modules):
+            if entry.startswith("@"):
+                found.update(f"{entry}/{scoped}" for scoped in os.listdir(os.path.join(node_modules, entry)))
+            else:
+                found.add(entry)
+        return found
+
+    def test_links_only_this_function_s_dependencies(self):
+        self._package("endpoints/fn", "@mono/fn")
+        mine = self._package("node_modules/lodash", "lodash")
+        siblings = self._package("node_modules/ms", "ms")
+        self.subprocess_npm.resolve_dependency_closure.return_value = [self.root, self.install_dir, mine]
+
+        self._action().execute()
+
+        self.assertEqual(self._linked(), {"lodash"})
+        self.assertTrue(os.path.exists(siblings), "the sibling's package must stay where npm put it")
+
+    def test_links_a_workspace_dependency_under_its_own_name(self):
+        # npm reports a workspace dependency as its source directory, whose basename is not the package name
+        self._package("endpoints/fn", "@mono/fn")
+        shared = self._package("packages/shared-impl", "@mono/shared")
+        self.subprocess_npm.resolve_dependency_closure.return_value = [self.root, self.install_dir, shared]
+
+        self._action().execute()
+
+        self.assertEqual(self._linked(), {"@mono/shared"})
+
+    def test_leaves_a_nested_copy_inside_the_dependency_that_pins_it(self):
+        # hoisting a nested copy to the top level would shadow the top-level version for every caller
+        self._package("endpoints/fn", "@mono/fn")
+        dep = self._package("packages/dep", "@mono/dep")
+        nested = self._package("packages/dep/node_modules/lodash", "lodash")
+        hoisted = self._package("node_modules/lodash", "lodash")
+        self.subprocess_npm.resolve_dependency_closure.return_value = [
+            self.root,
+            self.install_dir,
+            dep,
+            nested,
+            hoisted,
+        ]
+
+        self._action().execute()
+
+        self.assertEqual(self._linked(), {"@mono/dep", "lodash"})
+        self.assertEqual(
+            os.path.realpath(os.path.join(self.artifacts_dir, "node_modules", "lodash")),
+            os.path.realpath(hoisted),
+        )
+
+    def test_links_the_whole_installed_tree_when_npm_cannot_be_asked(self):
+        # an over-complete node_modules still runs; an empty one does not
+        self._package("node_modules/lodash", "lodash")
+        self._package("node_modules/ms", "ms")
+        self.subprocess_npm.resolve_dependency_closure.return_value = None
+
+        self._action().execute()
+
+        self.assertEqual(self._linked(), {"lodash", "ms"})
+
+    def test_fails_loudly_when_a_reported_package_has_no_manifest(self):
+        self._package("endpoints/fn", "@mono/fn")
+        no_manifest = os.path.join(self.root, "node_modules", "mystery")
+        os.makedirs(no_manifest)
+        self.subprocess_npm.resolve_dependency_closure.return_value = [self.root, self.install_dir, no_manifest]
+
+        with self.assertRaises(ActionFailedError) as raised:
+            self._action().execute()
+
+        self.assertIn("mystery", str(raised.exception))

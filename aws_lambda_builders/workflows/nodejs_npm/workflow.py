@@ -18,6 +18,7 @@ from aws_lambda_builders.workflow import BaseWorkflow, BuildDirectory, BuildInSo
 from aws_lambda_builders.workflows.nodejs_npm.actions import (
     NodejsNpmCIAction,
     NodejsNpmInstallAction,
+    NodejsNpmLinkDependencyClosureAction,
     NodejsNpmLockFileCleanUpAction,
     NodejsNpmPackAction,
     NodejsNpmrcAndLockfileCopyAction,
@@ -25,7 +26,7 @@ from aws_lambda_builders.workflows.nodejs_npm.actions import (
     NodejsNpmTestAction,
     NodejsNpmUpdateAction,
 )
-from aws_lambda_builders.workflows.nodejs_npm.npm import NpmExecutionError, SubprocessNpm
+from aws_lambda_builders.workflows.nodejs_npm.npm import SubprocessNpm
 from aws_lambda_builders.workflows.nodejs_npm.utils import OSUtils, is_nodejs_monorepo_support_enabled
 
 LOG = logging.getLogger(__name__)
@@ -67,9 +68,6 @@ class NodejsNpmWorkflow(BaseWorkflow):
         if osutils is None:
             osutils = OSUtils()
         self.osutils = osutils
-
-        # where the install leaves node_modules; resolved from npm once the install directory is known
-        self._installed_dependencies_dir = os.path.join(source_dir, "node_modules")
 
         if not osutils.file_exists(manifest_path):
             LOG.warning("package.json file not found. Continuing the build without dependencies.")
@@ -161,18 +159,33 @@ class NodejsNpmWorkflow(BaseWorkflow):
             # own path - and on Windows two spellings that differ only in case, a drive letter included,
             # name the same directory. Treating those as different roots would redirect the link for a
             # project that is not a workspace member at all. It is a no-op off Windows.
-            project_root = subprocess_npm.resolve_project_root(install_dir)
+            #
+            # Opt-in while this rolls out: without experimentalNodejsMonorepo npm is not asked at all and
+            # the link stays where it was, which for a monorepo is the silent gap #933 describes.
+            project_root = (
+                subprocess_npm.resolve_project_root(install_dir)
+                if is_nodejs_monorepo_support_enabled(self.experimental_flags)
+                else None
+            )
             if project_root and os.path.normcase(os.path.realpath(project_root)) != os.path.normcase(
                 os.path.realpath(install_dir)
             ):
                 LOG.debug(
-                    "NODEJS npm installs into %s rather than %s; linking the artifacts to the hoisted dependencies",
+                    "NODEJS npm installs into %s rather than %s; linking this function's own dependencies",
                     project_root,
                     install_dir,
                 )
-                self._installed_dependencies_dir = os.path.join(project_root, "node_modules")
-
-            self.actions += self._actions_for_linking_source_dependencies_to_artifacts
+                self.actions.append(
+                    NodejsNpmLinkDependencyClosureAction(
+                        install_dir=install_dir,
+                        project_root=project_root,
+                        artifacts_dir=artifacts_dir,
+                        subprocess_npm=subprocess_npm,
+                        osutils=osutils,
+                    )
+                )
+            else:
+                self.actions += self._actions_for_linking_source_dependencies_to_artifacts
 
         # if no dependencies dir, just cleanup artifacts and we're done
         if not self.dependencies_dir:
@@ -205,8 +218,9 @@ class NodejsNpmWorkflow(BaseWorkflow):
 
     @property
     def _actions_for_linking_source_dependencies_to_artifacts(self):
+        source_dependencies_path = os.path.join(self.source_dir, "node_modules")
         artifact_dependencies_path = os.path.join(self.artifacts_dir, "node_modules")
-        return [LinkSinglePathAction(source=self._installed_dependencies_dir, dest=artifact_dependencies_path)]
+        return [LinkSinglePathAction(source=source_dependencies_path, dest=artifact_dependencies_path)]
 
     @property
     def _actions_for_updating_dependencies_dir(self):
