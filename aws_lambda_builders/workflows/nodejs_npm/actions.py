@@ -9,6 +9,7 @@ from typing import Optional
 from aws_lambda_builders import utils
 from aws_lambda_builders.actions import ActionFailedError, BaseAction, Purpose
 from aws_lambda_builders.utils import extract_tarfile
+from aws_lambda_builders.workflows.nodejs_npm.lockfile_closure import production_closure
 from aws_lambda_builders.workflows.nodejs_npm.npm import NpmExecutionError, SubprocessNpm
 
 LOG = logging.getLogger(__name__)
@@ -389,7 +390,7 @@ class NodejsNpmLinkDependencyClosureAction(BaseAction):
     DESCRIPTION = "Linking this function's dependencies into the artifacts directory"
     PURPOSE = Purpose.LINK_SOURCE
 
-    def __init__(self, install_dir, project_root, artifacts_dir, subprocess_npm, osutils):
+    def __init__(self, install_dir, project_root, artifacts_dir, subprocess_npm, osutils, lockfile_path=None):
         """
         Parameters
         ----------
@@ -397,6 +398,8 @@ class NodejsNpmLinkDependencyClosureAction(BaseAction):
             the directory npm ran in, whose project's closure is wanted
         project_root : str
             the directory npm installed into, linked whole if the closure cannot be resolved
+        lockfile_path : Optional[str]
+            the lockfile npm will use, read instead of spawning `npm ls` when it has a path map
         artifacts_dir : str
             an existing (writable) directory where node_modules is assembled
         subprocess_npm : aws_lambda_builders.workflows.nodejs_npm.npm.SubprocessNpm
@@ -410,9 +413,16 @@ class NodejsNpmLinkDependencyClosureAction(BaseAction):
         self._artifacts_dir = artifacts_dir
         self._subprocess_npm = subprocess_npm
         self._osutils = osutils
+        self._lockfile_path = lockfile_path
 
     def execute(self):
-        closure = self._subprocess_npm.resolve_dependency_closure(self._install_dir)
+        # the lockfile already describes the resolved tree, so read it rather than paying an npm
+        # process per function; it answers None for a version 1 lockfile, which has no path map
+        closure = None
+        if self._lockfile_path:
+            closure = production_closure(self._project_root, self._install_dir, self._lockfile_path)
+        if closure is None:
+            closure = self._subprocess_npm.resolve_dependency_closure(self._install_dir)
         destination = os.path.join(self._artifacts_dir, "node_modules")
 
         if closure is None:
@@ -443,12 +453,12 @@ class NodejsNpmLinkDependencyClosureAction(BaseAction):
         is - hoisting it would shadow the top-level version for every other caller - and it is already
         reachable through the dependency that contains it, so only the outermost paths are linked.
         """
-        # Every comparison below goes through normcase, never the raw path: these paths are npm's
-        # spelling while project_root and install_dir are the build's, and on Windows two spellings
-        # differing only in case name the same directory. An unmatched project root would be linked as
-        # if it were one of its own dependencies, and an unrecognised nested copy would be hoisted to
-        # the top level, shadowing the version every other caller resolves. The original paths are what
-        # gets linked, so only the comparisons are normalised. No-op off Windows.
+        # Every comparison below goes through normcase, never the raw path. When the closure comes from
+        # `npm ls` these paths are npm's spelling while project_root and install_dir are the build's, and
+        # on Windows two spellings differing only in case name the same directory: an unmatched project
+        # root would be linked as if it were one of its own dependencies, and an unrecognised nested copy
+        # would be hoisted to the top level, shadowing the version every other caller resolves. The
+        # original paths are what gets linked, so only the comparisons are normalised. No-op off Windows.
         paths = [os.path.realpath(path) for path in closure]
         excluded = {os.path.normcase(os.path.realpath(d)) for d in (self._project_root, self._install_dir)}
         candidates = [path for path in paths if os.path.normcase(path) not in excluded]

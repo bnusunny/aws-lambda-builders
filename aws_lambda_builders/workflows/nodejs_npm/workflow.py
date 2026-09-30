@@ -179,6 +179,7 @@ class NodejsNpmWorkflow(BaseWorkflow):
                     NodejsNpmLinkDependencyClosureAction(
                         install_dir=install_dir,
                         project_root=project_root,
+                        lockfile_path=NodejsNpmWorkflow.get_lockfile_path(install_dir, subprocess_npm, osutils),
                         artifacts_dir=artifacts_dir,
                         subprocess_npm=subprocess_npm,
                         osutils=osutils,
