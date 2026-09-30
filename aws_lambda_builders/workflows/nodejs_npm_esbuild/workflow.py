@@ -46,6 +46,10 @@ class NodejsNpmEsbuildWorkflow(BaseWorkflow):
     DEFAULT_BUILD_DIR = BuildDirectory.SCRATCH
     BUILD_IN_SOURCE_SUPPORT = BuildInSourceSupport.OPTIONALLY_SUPPORTED
 
+    # installs go through the same npm project tree as the plain npm workflow, so the shared
+    # (once per workspace root) install is the same operation
+    install_shared_dependencies = staticmethod(NodejsNpmWorkflow.install_shared_dependencies)
+
     def __init__(self, source_dir, artifacts_dir, scratch_dir, manifest_path, runtime=None, osutils=None, **kwargs):
         super(NodejsNpmEsbuildWorkflow, self).__init__(
             source_dir, artifacts_dir, scratch_dir, manifest_path, runtime=runtime, **kwargs
@@ -75,8 +79,11 @@ class NodejsNpmEsbuildWorkflow(BaseWorkflow):
             ]
             return
 
-        if not self.download_dependencies and not self.dependencies_dir:
-            # Invalid workflow, can't have no dependency dir and no installation
+        if not self.download_dependencies and not self.dependencies_dir and not is_building_in_source:
+            # Without downloading and without a dependencies_dir there is nothing to bundle from -
+            # unless the build runs in the source directory, where the dependencies already sit in
+            # the source tree (installed by the developer, or once per workspace root by
+            # LambdaBuilder.install_shared_dependencies) and the bundler resolves them from there.
             raise EsbuildExecutionError(
                 message="Lambda Builders was unable to find the location of the dependencies since a "
                 "dependencies directory was not provided and downloading dependencies is disabled."

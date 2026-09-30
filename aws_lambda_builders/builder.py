@@ -7,6 +7,7 @@ import logging
 import os
 
 from aws_lambda_builders.architecture import X86_64
+from aws_lambda_builders.exceptions import SharedDependenciesInstallNotSupportedError
 from aws_lambda_builders.registry import DEFAULT_REGISTRY, get_workflow
 from aws_lambda_builders.workflow import Capability
 
@@ -170,6 +171,33 @@ class LambdaBuilder(object):
         )
 
         return workflow.run()
+
+    def install_shared_dependencies(self, project_root):
+        """
+        Install, once, the dependencies shared by every package under the given project root.
+
+        For workflows whose package manager keeps one dependency tree for a whole project - npm
+        workspaces hoist every member's dependencies to the monorepo root - a caller building several
+        functions from that project can run this once and then call build() for each function with
+        download_dependencies=False.
+
+        :type project_root: str
+        :param project_root:
+            Path to the project root shared by the functions about to be built
+
+        :raises aws_lambda_builders.exceptions.SharedDependenciesInstallNotSupportedError:
+            when the selected workflow has no shared-install concept
+        :raises aws_lambda_builders.exceptions.SharedDependenciesInstallError:
+            when the install itself fails; the caller can fall back to per-function installs
+        """
+        installer = getattr(self.selected_workflow_cls, "install_shared_dependencies", None)
+        if installer is None:
+            raise SharedDependenciesInstallNotSupportedError(capabilities=self.capability)
+
+        LOG.debug(
+            "Installing shared dependencies in '%s' with workflow '%s'", project_root, self.selected_workflow_cls.NAME
+        )
+        installer(project_root)
 
     def _clear_workflows(self):
         DEFAULT_REGISTRY.clear()
