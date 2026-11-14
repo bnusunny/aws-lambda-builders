@@ -158,8 +158,12 @@ class UvConfig:
         self.prune = prune or []
 
     def to_export_args(self) -> List[str]:
-        """Convert the dependency selection to `uv export` arguments."""
-        args = [] if self.install_project else ["--no-emit-project"]
+        """Convert the dependency selection to `uv export` arguments.
+
+        The project is never exported: with install_project it is installed on its own
+        (see UvRunner.install_project) so its build stays out of the source tree.
+        """
+        args = ["--no-emit-project"]
         for group in self.groups:
             args.extend(["--group", group])
         for extra in self.extras:

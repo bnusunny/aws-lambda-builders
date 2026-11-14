@@ -660,7 +660,7 @@ version = "4.2.0"
         assert "certifi" in installed_packages
 
     def test_lock_export_uses_build_options(self, tmpdir, uv_runner, osutils):
-        """Build options select groups and extras and keep the project in the export"""
+        """Build options select groups and extras; the project is installed after its dependencies"""
         fake_uv, runner = uv_runner
         appdir, builder, manifest_path = self._make_appdir_and_dependency_builder(
             ["six"], tmpdir, runner, manifest_type="pyproject"
@@ -679,10 +679,14 @@ version = "4.2.0"
             )
 
         export_args = fake_uv._calls["export"][0][0]
-        assert "--no-emit-project" not in export_args
+        assert "--no-emit-project" in export_args
         assert "--no-editable" in export_args
         assert "--no-default-groups" in export_args
         assert export_args[export_args.index("--group") :][:2] == ["--group", "lambda"]
         assert [export_args[i + 1] for i, arg in enumerate(export_args) if arg == "--extra"] == ["fast", "small"]
-        pip_args = fake_uv._calls["pip"][0][0]
-        assert "--group" not in pip_args and "--extra" not in pip_args
+        deps_args, project_args = (call[0] for call in fake_uv._calls["pip"])
+        for pip_args in (deps_args, project_args):
+            assert "--group" not in pip_args and "--extra" not in pip_args
+        assert project_args[2:4] == ["--no-deps", appdir]
+        project_env = fake_uv._calls["pip"][1][1]
+        assert project_env["DIST_EXTRA_CONFIG"].startswith(scratch_dir)

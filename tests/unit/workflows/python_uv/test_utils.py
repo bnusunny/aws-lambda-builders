@@ -225,7 +225,9 @@ class TestUvConfig(TestCase):
 
     def test_uv_config_export_args_with_build_options(self):
         config = UvConfig(groups=["lambda", "aws"], extras=["fast"], install_project=True)
-        self.assertEqual(config.to_export_args(), ["--group", "lambda", "--group", "aws", "--extra", "fast"])
+        self.assertEqual(
+            config.to_export_args(), ["--no-emit-project", "--group", "lambda", "--group", "aws", "--extra", "fast"]
+        )
         self.assertEqual(UvConfig(all_extras=True).to_export_args(), ["--no-emit-project", "--all-extras"])
         # Export selection flags must never leak into `uv pip install`
         self.assertEqual(config.to_uv_args(), [])

@@ -143,13 +143,66 @@ class UvRunner:
             platform: Target platform
             architecture: Target architecture
         """
+        # Resolve the requirements file before UV changes to the project or workspace directory
+        self._pip_install(
+            ["-r", os.path.abspath(requirements_path)], target_dir, config, python_version, platform, architecture, cwd
+        )
+
+    def install_project(
+        self,
+        project_dir: str,
+        build_dir: str,
+        target_dir: str,
+        config: Optional[UvConfig] = None,
+        python_version: Optional[str] = None,
+        platform: Optional[str] = None,
+        architecture: Optional[str] = None,
+        cwd: Optional[str] = None,
+    ) -> None:
+        """Install the project itself, non-editable and without its dependencies.
+
+        setuptools builds in the source tree, leaving build/ and *.egg-info there for
+        CopySourceAction to ship. DIST_EXTRA_CONFIG moves both into ``build_dir``; other
+        build backends ignore it. Only this one package is built here: setuptools packs
+        everything under build_base into the wheel, so packages must not share one.
+
+        shortcut: local path dependencies (e.g. workspace members) are still built in their
+        own source trees by the dependency install; give each its own build_base if that matters.
+        """
+        os.makedirs(build_dir, exist_ok=True)
+        config_path = os.path.join(build_dir, "setup.cfg")
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            config_file.write(
+                f"[build]\nbuild_base = {os.path.join(build_dir, 'build')}\n[egg_info]\negg_base = {build_dir}\n"
+            )
+        env = dict(self._osutils.original_environ(), DIST_EXTRA_CONFIG=config_path)
+        self._pip_install(
+            ["--no-deps", os.path.abspath(project_dir)],
+            target_dir,
+            config,
+            python_version,
+            platform,
+            architecture,
+            cwd,
+            env=env,
+        )
+
+    def _pip_install(
+        self,
+        sources: List[str],
+        target_dir: str,
+        config: Optional[UvConfig],
+        python_version: Optional[str],
+        platform: Optional[str],
+        architecture: Optional[str],
+        cwd: Optional[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> None:
         if config is None:
             config = UvConfig()
 
         args = ["pip", "install"]
-
-        # Resolve the requirements file before UV changes to the project or workspace directory
-        args.extend(["-r", os.path.abspath(requirements_path)])
+        args.extend(sources)
 
         # Resolve --target to an absolute path: UV runs from the project or workspace directory,
         # so a relative target (e.g. the incremental-build dependencies dir) would otherwise be
@@ -183,7 +236,7 @@ class UvRunner:
                 args.extend(["--python-platform", python_platform])
 
         # Execute UV pip install
-        rc, stdout, stderr = self._uv.run_uv_command(args, cwd)
+        rc, stdout, stderr = self._uv.run_uv_command(args, cwd, env=env)
 
         if rc != 0:
             raise UvInstallationError(reason=f"UV pip install failed: {stderr}")
@@ -513,7 +566,7 @@ class PythonUvDependencyBuilder:
                 "--python",
                 python_version,
             ]
-            # By default only dependencies, not the project itself (see UvConfig.to_export_args)
+            # Only dependencies; uv_install_project installs the project itself below
             export_args.extend(config.to_export_args())
             export_args.extend(self._lock_export_options(lock_path))
 
@@ -536,6 +589,17 @@ class PythonUvDependencyBuilder:
                 cwd=workspace_dir,
                 architecture=architecture,
             )
+            if config.install_project:
+                self._uv_runner.install_project(
+                    project_dir=project_dir,
+                    build_dir=os.path.abspath(os.path.join(scratch_dir, "project-build")),
+                    target_dir=target_dir,
+                    config=config,
+                    python_version=python_version,
+                    platform="linux",
+                    architecture=architecture,
+                    cwd=workspace_dir,
+                )
         except LockFileError:
             raise
         except Exception as e:

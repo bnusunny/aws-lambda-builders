@@ -266,6 +266,28 @@ class TestUvRunner(TestCase):
         args = self.mock_subprocess_uv.run_uv_command.call_args.args[0]
         self.assertEqual(args[args.index("-r") + 1], os.path.abspath(os.path.join("app", "requirements.txt")))
 
+    def test_install_project_builds_outside_the_source_tree(self):
+        self.mock_subprocess_uv.run_uv_command.return_value = (0, "", "")
+        self.mock_osutils.original_environ.return_value = {"PATH": "/bin"}
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = os.path.join(tmp, "project-build")
+            self.uv_runner.install_project(
+                project_dir="/src/app", build_dir=build_dir, target_dir="/target", cwd="/workspace"
+            )
+
+            call = self.mock_subprocess_uv.run_uv_command.call_args
+            args = call.args[0]
+            self.assertEqual(args[:4], ["pip", "install", "--no-deps", os.path.abspath("/src/app")])
+            self.assertEqual(call.args[1], "/workspace")
+            env = call.kwargs["env"]
+            self.assertEqual(env["PATH"], "/bin")
+            # setuptools reads build_base and egg_base from this file instead of using the source dir
+            self.assertEqual(env["DIST_EXTRA_CONFIG"], os.path.join(build_dir, "setup.cfg"))
+            self.assertEqual(
+                Path(env["DIST_EXTRA_CONFIG"]).read_text(encoding="utf-8"),
+                f"[build]\nbuild_base = {os.path.join(build_dir, 'build')}\n[egg_info]\negg_base = {build_dir}\n",
+            )
+
 
 class TestPythonUvDependencyBuilder(TestCase):
     def setUp(self):
@@ -327,10 +349,26 @@ class TestPythonUvDependencyBuilder(TestCase):
         self.builder._build_from_lock_file("/path/to/uv.lock", "/target", "/scratch", "3.9", X86_64, config)
 
         export_args = self.mock_uv_runner._uv.run_uv_command.call_args_list[0].args[0]
-        self.assertNotIn("--no-emit-project", export_args)
+        # The project is installed on its own, after its dependencies
+        self.assertIn("--no-emit-project", export_args)
         self.assertIn("--no-editable", export_args)
         self.assertEqual(export_args[export_args.index("--group") + 1], "lambda")
         self.assertEqual(export_args[export_args.index("--extra") + 1], "fast")
+        self.mock_uv_runner.install_project.assert_called_once_with(
+            project_dir="/path/to",
+            build_dir=os.path.abspath(os.path.join("/scratch", "project-build")),
+            target_dir="/target",
+            config=config,
+            python_version="3.9",
+            platform="linux",
+            architecture=X86_64,
+            cwd="/workspace",
+        )
+
+    def test_build_from_lock_file_skips_project_by_default(self):
+        self.mock_uv_runner._uv.run_uv_command.side_effect = [(0, "", ""), (0, "/workspace\n", "")]
+        self.builder._build_from_lock_file("/path/to/uv.lock", "/target", "/scratch", "3.9", X86_64, UvConfig())
+        self.mock_uv_runner.install_project.assert_not_called()
 
     def test_build_from_lock_file_prunes_locked_packages(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -617,6 +617,42 @@ class TestPythonUvWorkflow(TestCase):
         self.assertTrue(artifacts.joinpath("optsapp-0.1.0.dist-info").is_dir())
         self.assertEqual(list(artifacts.rglob("*.pth")), [])
 
+    @parameterized.expand(
+        [
+            # uv falls back to a legacy setuptools build when [build-system] is missing
+            ("legacy_setuptools", "[tool.uv]\npackage = true\n"),
+            ("setuptools", '[build-system]\nrequires = ["setuptools>=68"]\nbuild-backend = "setuptools.build_meta"\n'),
+        ]
+    )
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_install_project_keeps_build_files_out_of_source(self, _name, build_config):
+        with tempfile.TemporaryDirectory() as source_dir:
+            pathlib.Path(source_dir, "pyproject.toml").write_text(
+                '[project]\nname = "pkgapp"\nversion = "0.2.0"\nrequires-python = ">=3.9"\n'
+                f'dependencies = ["six==1.16.0"]\n\n{build_config}'
+            )
+            pathlib.Path(source_dir, "pkgapp").mkdir()
+            pathlib.Path(source_dir, "pkgapp", "__init__.py").write_text("VALUE = 2\n")
+
+            LambdaBuilder(language="python", dependency_manager="uv", application_framework=None).build(
+                source_dir,
+                self.artifacts_dir,
+                self.scratch_dir,
+                os.path.join(source_dir, "pyproject.toml"),
+                runtime=f"python{sys.version_info.major}.{sys.version_info.minor}",
+                experimental_flags=self.experimental_flags,
+                options={"uv_install_project": True},
+            )
+
+            # setuptools builds in-tree by default; build/ would then be copied into the artifacts
+            self.assertEqual(sorted(os.listdir(source_dir)), ["pkgapp", "pyproject.toml", "uv.lock"])
+
+        artifacts = pathlib.Path(self.artifacts_dir)
+        self.assertFalse(artifacts.joinpath("build").exists())
+        self.assertEqual(list(artifacts.glob("*.egg-info")), [])
+        self.assertTrue(artifacts.joinpath("pkgapp-0.2.0.dist-info").is_dir())
+        self.assertTrue(artifacts.joinpath("six.py").is_file())
+
     @skipIf(which("uv") is None, "uv not available")
     def test_workflow_prunes_runtime_provided_packages(self):
         with tempfile.TemporaryDirectory() as source_dir:
