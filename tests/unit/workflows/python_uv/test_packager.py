@@ -272,6 +272,19 @@ class TestPythonUvDependencyBuilder(TestCase):
         # Verify install_requirements is called from workspace root
         assert self.mock_uv_runner._uv.run_uv_command.call_args.kwargs["cwd"] == "/path/to"
         assert self.mock_uv_runner.install_requirements.call_args.kwargs["cwd"] == "/workspace"
+        self.assertIn("--no-emit-project", export_args)
+
+    def test_build_from_lock_file_passes_build_options_to_export(self):
+        self.mock_uv_runner._uv.run_uv_command.side_effect = [(0, "", ""), (0, "/workspace\n", "")]
+        config = UvConfig(groups=["lambda"], extras=["fast"], install_project=True)
+
+        self.builder._build_from_lock_file("/path/to/uv.lock", "/target", "/scratch", "3.9", X86_64, config)
+
+        export_args = self.mock_uv_runner._uv.run_uv_command.call_args_list[0].args[0]
+        self.assertNotIn("--no-emit-project", export_args)
+        self.assertIn("--no-editable", export_args)
+        self.assertEqual(export_args[export_args.index("--group") + 1], "lambda")
+        self.assertEqual(export_args[export_args.index("--extra") + 1], "fast")
 
     @patch(
         "builtins.open",

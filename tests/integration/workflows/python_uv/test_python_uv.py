@@ -581,3 +581,38 @@ class TestPythonUvWorkflow(TestCase):
             self.assertTrue(pathlib.Path(self.artifacts_dir, "workspace_lib", "__init__.py").is_file())
             self.assertEqual(list(pathlib.Path(self.artifacts_dir).glob("workspace_app-*.dist-info")), [])
             self.assertEqual(list(pathlib.Path(self.artifacts_dir).rglob("*.pth")), [])
+
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_applies_build_options(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            pathlib.Path(source_dir, "pyproject.toml").write_text(
+                '[project]\nname = "optsapp"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+                'dependencies = ["six==1.16.0"]\n\n'
+                '[project.optional-dependencies]\ndns = ["idna==3.10"]\n\n'
+                '[dependency-groups]\nlambda = ["toml==0.10.2"]\nother = ["pyasn1==0.6.1"]\n\n'
+                '[build-system]\nrequires = ["uv_build>=0.8,<1"]\nbuild-backend = "uv_build"\n'
+            )
+            package_dir = pathlib.Path(source_dir, "src", "optsapp")
+            package_dir.mkdir(parents=True)
+            package_dir.joinpath("__init__.py").write_text("VALUE = 1\n")
+
+            builder = LambdaBuilder(language="python", dependency_manager="uv", application_framework=None)
+            builder.build(
+                source_dir,
+                self.artifacts_dir,
+                self.scratch_dir,
+                os.path.join(source_dir, "pyproject.toml"),
+                runtime=f"python{sys.version_info.major}.{sys.version_info.minor}",
+                experimental_flags=self.experimental_flags,
+                options={"uv_groups": ["lambda"], "uv_extras": ["dns"], "uv_install_project": True},
+            )
+
+        artifacts = pathlib.Path(self.artifacts_dir)
+        self.assertTrue(artifacts.joinpath("six.py").is_file())
+        self.assertTrue(artifacts.joinpath("toml", "__init__.py").is_file())
+        self.assertTrue(artifacts.joinpath("idna", "__init__.py").is_file())
+        self.assertEqual(list(artifacts.glob("pyasn1*")), [])
+        # The project itself is installed as a regular package, not an editable link
+        self.assertEqual(artifacts.joinpath("optsapp", "__init__.py").read_text(), "VALUE = 1\n")
+        self.assertTrue(artifacts.joinpath("optsapp-0.1.0.dist-info").is_dir())
+        self.assertEqual(list(artifacts.rglob("*.pth")), [])

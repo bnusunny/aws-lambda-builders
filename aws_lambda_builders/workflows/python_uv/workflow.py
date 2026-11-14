@@ -3,14 +3,48 @@ Python UV Workflow
 """
 
 import logging
+import os
 
 from aws_lambda_builders.actions import CleanUpAction, CopyDependenciesAction, CopySourceAction
+from aws_lambda_builders.exceptions import WorkflowFailedError
 from aws_lambda_builders.workflow import BaseWorkflow, BuildDirectory, BuildInSourceSupport, Capability
 
 from .actions import PythonUvBuildAction
-from .utils import OSUtils, detect_uv_manifest
+from .utils import OSUtils, UvConfig, detect_uv_manifest
 
 LOG = logging.getLogger(__name__)
+
+# Build options (from sam-cli Metadata.BuildProperties) and their expected types
+UV_OPTIONS = {
+    "uv_groups": list,
+    "uv_extras": list,
+    "uv_all_extras": bool,
+    "uv_install_project": bool,
+}
+
+
+def _is_packaged_project(pyproject_path):
+    """Whether uv builds and installs this project, rather than treating it as virtual."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        try:
+            import tomli as tomllib
+        except ModuleNotFoundError:
+            return True
+
+    try:
+        with open(pyproject_path, "rb") as pyproject_file:
+            pyproject = tomllib.load(pyproject_file)
+    except (OSError, ValueError):
+        # Leave unreadable manifests to uv's own diagnostics.
+        return True
+    tool = pyproject.get("tool")
+    uv_config = tool.get("uv") if isinstance(tool, dict) else None
+    package = uv_config.get("package") if isinstance(uv_config, dict) else None
+    if isinstance(package, bool):
+        return package
+    return isinstance(pyproject.get("build-system"), dict)
 
 
 class PythonUvWorkflow(BaseWorkflow):
@@ -104,9 +138,56 @@ class PythonUvWorkflow(BaseWorkflow):
                 )
                 manifest_path = None
 
-        self._setup_build_actions(source_dir, artifacts_dir, scratch_dir, manifest_path, runtime)
+        config = self._uv_config_from_options(manifest_path)
+        self._setup_build_actions(source_dir, artifacts_dir, scratch_dir, manifest_path, runtime, config)
 
-    def _setup_build_actions(self, source_dir, artifacts_dir, scratch_dir, manifest_path, runtime):
+    def _fail(self, reason):
+        raise WorkflowFailedError(workflow_name=self.NAME, action_name=None, reason=reason)
+
+    def _uv_config_from_options(self, manifest_path):
+        """Build the UvConfig from the uv_* build options, rejecting anything invalid."""
+        options = self.options if isinstance(self.options, dict) else {}
+        unknown = sorted(key for key in options if key.startswith("uv_") and key not in UV_OPTIONS)
+        if unknown:
+            self._fail(f"Unknown uv build option(s): {', '.join(unknown)}. Supported: {', '.join(UV_OPTIONS)}")
+
+        values = {key: options[key] for key in UV_OPTIONS if options.get(key) is not None}
+        for key, value in values.items():
+            if UV_OPTIONS[key] is bool:
+                valid = isinstance(value, bool)
+            else:
+                valid = isinstance(value, list) and all(isinstance(item, str) and item for item in value)
+            if not valid:
+                expected = "true or false" if UV_OPTIONS[key] is bool else "a list of non-empty strings"
+                self._fail(f"Build option {key} must be {expected}, got {value!r}")
+
+        if values.get("uv_all_extras") and values.get("uv_extras"):
+            self._fail("Build options uv_extras and uv_all_extras cannot be used together")
+
+        if not any(values.values()):
+            return UvConfig()
+
+        if not manifest_path or os.path.basename(manifest_path) != "pyproject.toml":
+            self._fail(
+                f"Build options {', '.join(sorted(values))} need a pyproject.toml project, "
+                f"but this build uses {os.path.basename(manifest_path) if manifest_path else 'no manifest'}"
+            )
+
+        if values.get("uv_install_project") and not _is_packaged_project(manifest_path):
+            # uv export silently omits virtual projects, so the option would do nothing.
+            self._fail(
+                "Build option uv_install_project needs a [build-system] table "
+                f"(or tool.uv.package = true) in {manifest_path}"
+            )
+
+        return UvConfig(
+            groups=values.get("uv_groups"),
+            extras=values.get("uv_extras"),
+            all_extras=values.get("uv_all_extras", False),
+            install_project=values.get("uv_install_project", False),
+        )
+
+    def _setup_build_actions(self, source_dir, artifacts_dir, scratch_dir, manifest_path, runtime, config=None):
         """
         Set up the build actions based on configuration.
 
@@ -136,6 +217,7 @@ class PythonUvWorkflow(BaseWorkflow):
                     self.dependencies_dir,  # Pass for action's internal logic
                     binaries=self.binaries,
                     architecture=self.architecture,
+                    config=config,
                 )
             )
 

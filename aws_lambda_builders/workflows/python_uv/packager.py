@@ -460,7 +460,6 @@ class PythonUvDependencyBuilder:
                 "--locked",  # Reject stale locks rather than rewriting them or omitting new dependencies
                 "--format",
                 "requirements.txt",
-                "--no-emit-project",  # Don't include the project itself, only dependencies
                 "--no-default-groups",  # Exclude PEP 735 default groups (e.g. dev/test) from Lambda zips
                 # Install package bodies instead of editable .pth links, which break in Lambda zips.
                 "--no-editable",
@@ -471,6 +470,8 @@ class PythonUvDependencyBuilder:
                 "--python",
                 python_version,
             ]
+            # By default only dependencies, not the project itself (see UvConfig.to_export_args)
+            export_args.extend(config.to_export_args())
             export_args.extend(self._lock_export_options(lock_path))
 
             rc, stdout, stderr = self._uv_runner._uv.run_uv_command(export_args, cwd=project_dir)

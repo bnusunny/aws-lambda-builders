@@ -220,6 +220,26 @@ config = {
 }
 ```
 
+### Build options
+
+`PythonUvWorkflow` reads these keys from the workflow `options` and passes them to `uv export`.
+SAM CLI maps them from `Metadata.BuildProperties`.
+
+| Option | SAM CLI property | Type | `uv export` effect |
+|---|---|---|---|
+| `uv_groups` | `UvGroups` | list of str | `--group <name>` per entry |
+| `uv_extras` | `UvExtras` | list of str | `--extra <name>` per entry |
+| `uv_all_extras` | `UvAllExtras` | bool | `--all-extras` |
+| `uv_install_project` | `UvInstallProject` | bool, default false | drops `--no-emit-project`, so the project is installed (non-editable) |
+
+Default groups stay excluded (`--no-default-groups`); `uv_groups` adds groups on top of that.
+The build fails with a clear message, instead of ignoring the option, when:
+- a value has the wrong type, or an unknown `uv_*` key is given;
+- `uv_extras` and `uv_all_extras` are combined;
+- an option is set on a `requirements.txt` build (they apply only to pyproject.toml / uv.lock projects);
+- `uv_install_project` is set on a virtual project (no `[build-system]`, or `tool.uv.package = false`),
+  which `uv export` would otherwise silently leave out.
+
 ### Caching
 
 The workflow does not pass `--cache-dir` unless a caller supplies one, so UV uses its own

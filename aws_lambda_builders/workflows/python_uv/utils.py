@@ -136,6 +136,10 @@ class UvConfig:
         compile_bytecode: bool = True,
         exclude_newer: Optional[str] = None,
         generate_hashes: bool = False,
+        groups: Optional[List[str]] = None,
+        extras: Optional[List[str]] = None,
+        all_extras: bool = False,
+        install_project: bool = False,
     ):
         self.index_url = index_url
         self.extra_index_urls = extra_index_urls or []
@@ -146,6 +150,21 @@ class UvConfig:
         self.compile_bytecode = compile_bytecode
         self.exclude_newer = exclude_newer
         self.generate_hashes = generate_hashes
+        self.groups = groups or []
+        self.extras = extras or []
+        self.all_extras = all_extras
+        self.install_project = install_project
+
+    def to_export_args(self) -> List[str]:
+        """Convert the dependency selection to `uv export` arguments."""
+        args = [] if self.install_project else ["--no-emit-project"]
+        for group in self.groups:
+            args.extend(["--group", group])
+        for extra in self.extras:
+            args.extend(["--extra", extra])
+        if self.all_extras:
+            args.append("--all-extras")
+        return args
 
     def to_uv_args(self) -> List[str]:
         """Convert configuration to UV command line arguments."""
