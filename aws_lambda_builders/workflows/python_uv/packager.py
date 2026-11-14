@@ -307,6 +307,31 @@ class PythonUvDependencyBuilder:
             LOG.error("Failed to build dependencies: %s", str(e))
             raise
 
+    def install_project(
+        self,
+        manifest_path: str,
+        target_dir: str,
+        scratch_dir: str,
+        architecture: str = X86_64,
+        config: Optional[UvConfig] = None,
+    ) -> None:
+        """Install the project of manifest_path (a pyproject.toml) into target_dir, without its dependencies.
+
+        This is separate from build_dependencies because the project is the function's own code:
+        it must be rebuilt on every build, also when the dependencies are reused from a previous one.
+        """
+        project_dir = os.path.dirname(manifest_path)
+        self._uv_runner.install_project(
+            project_dir=project_dir,
+            build_dir=os.path.abspath(os.path.join(scratch_dir, "project-build")),
+            target_dir=target_dir,
+            config=config,
+            python_version=self._extract_python_version(self.runtime),
+            platform="linux",
+            architecture=architecture,
+            cwd=self._resolve_workspace_dir(project_dir),
+        )
+
     def _get_manifest_handler(self, manifest_name: str):
         """Get the appropriate handler function for a manifest file.
 
@@ -566,7 +591,7 @@ class PythonUvDependencyBuilder:
                 "--python",
                 python_version,
             ]
-            # Only dependencies; uv_install_project installs the project itself below
+            # Only dependencies; uv_install_project installs the project itself (see install_project)
             export_args.extend(config.to_export_args())
             export_args.extend(self._lock_export_options(lock_path))
 
@@ -589,17 +614,6 @@ class PythonUvDependencyBuilder:
                 cwd=workspace_dir,
                 architecture=architecture,
             )
-            if config.install_project:
-                self._uv_runner.install_project(
-                    project_dir=project_dir,
-                    build_dir=os.path.abspath(os.path.join(scratch_dir, "project-build")),
-                    target_dir=target_dir,
-                    config=config,
-                    python_version=python_version,
-                    platform="linux",
-                    architecture=architecture,
-                    cwd=workspace_dir,
-                )
         except LockFileError:
             raise
         except Exception as e:

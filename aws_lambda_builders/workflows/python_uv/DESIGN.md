@@ -238,6 +238,9 @@ setuptools (also uv's fallback when `[build-system]` is missing) builds in the s
 `build/` and `*.egg-info` there, and `build/` would be copied into the artifacts. The project install sets
 `DIST_EXTRA_CONFIG` to a config file in the scratch dir that moves both there; other build backends ignore it.
 It installs only the project, because setuptools packs everything under its build directory into the wheel.
+The project is the function's own code, so a separate `InstallProject` action installs it straight into the
+artifacts dir on every build, after any dependencies are copied there. It never goes into `dependencies_dir`,
+whose contents incremental builds (`download_dependencies=False`) reuse.
 `uv_prune` is meant for packages the Lambda runtime already ships, such as `boto3`. The function then
 uses the runtime's version, which AWS picks, not the version in `uv.lock`.
 The build fails with a clear message, instead of ignoring the option, when:

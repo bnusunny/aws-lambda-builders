@@ -15,6 +15,11 @@ from .utils import OSUtils, UvConfig
 LOG = logging.getLogger(__name__)
 
 
+def _dependency_builder(osutils, runtime):
+    uv_runner = UvRunner(uv_subprocess=SubprocessUv(osutils=osutils), osutils=osutils)
+    return PythonUvDependencyBuilder(osutils=osutils, runtime=runtime, uv_runner=uv_runner)
+
+
 class PythonUvBuildAction(BaseAction):
     """Action for building Python dependencies using UV."""
 
@@ -47,16 +52,7 @@ class PythonUvBuildAction(BaseAction):
 
     def execute(self) -> None:
         """Execute the build action for Python UV workflows."""
-        # Initialize UV components
-        uv_subprocess = SubprocessUv(osutils=self._os_utils)
-        uv_runner = UvRunner(uv_subprocess=uv_subprocess, osutils=self._os_utils)
-
-        # Create main package builder
-        package_builder = PythonUvDependencyBuilder(
-            osutils=self._os_utils,
-            runtime=self.runtime,
-            uv_runner=uv_runner,
-        )
+        package_builder = _dependency_builder(self._os_utils, self.runtime)
 
         try:
             # Determine target directory
@@ -73,4 +69,35 @@ class PythonUvBuildAction(BaseAction):
                 config=self.config,
             )
         except (LockFileError, MissingUvError, UvInstallationError, UvBuildError) as ex:
+            raise ActionFailedError(str(ex))
+
+
+class PythonUvInstallProjectAction(BaseAction):
+    """Action for installing the project itself (uv_install_project) into the artifacts."""
+
+    NAME = "InstallProject"
+    DESCRIPTION = "Installing the project using UV"
+    PURPOSE = Purpose.COMPILE_SOURCE
+    LANGUAGE = "python"
+
+    def __init__(self, artifacts_dir, scratch_dir, manifest_path, runtime, architecture=X86_64, config=None):
+        self.artifacts_dir = artifacts_dir
+        self.scratch_dir = scratch_dir
+        self.manifest_path = manifest_path
+        self.runtime = runtime
+        self.architecture = architecture
+        self.config = config or UvConfig()
+
+        self._os_utils = OSUtils()
+
+    def execute(self) -> None:
+        try:
+            _dependency_builder(self._os_utils, self.runtime).install_project(
+                manifest_path=self.manifest_path,
+                target_dir=self.artifacts_dir,
+                scratch_dir=self.scratch_dir,
+                architecture=self.architecture,
+                config=self.config,
+            )
+        except (MissingUvError, UvInstallationError, UvBuildError) as ex:
             raise ActionFailedError(str(ex))

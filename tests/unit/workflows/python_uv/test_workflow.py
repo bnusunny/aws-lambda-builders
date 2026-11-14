@@ -8,7 +8,7 @@ from parameterized import parameterized, parameterized_class
 
 from aws_lambda_builders.actions import CleanUpAction, CopyDependenciesAction, CopySourceAction
 from aws_lambda_builders.exceptions import WorkflowFailedError
-from aws_lambda_builders.workflows.python_uv.actions import PythonUvBuildAction
+from aws_lambda_builders.workflows.python_uv.actions import PythonUvBuildAction, PythonUvInstallProjectAction
 from aws_lambda_builders.workflows.python_uv.utils import EXPERIMENTAL_FLAG_BUILD_PERFORMANCE, OSUtils
 from aws_lambda_builders.workflows.python_uv.workflow import PythonUvWorkflow
 
@@ -208,7 +208,7 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
         with open(self.pyproject, "w") as f:
             f.write('[project]\nname = "app"\nversion = "0.1.0"\n' + extra)
 
-    def _workflow(self, options, manifest=None):
+    def _workflow(self, options, manifest=None, **kwargs):
         return PythonUvWorkflow(
             self.source_dir,
             "artifacts",
@@ -216,7 +216,25 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
             manifest or self.pyproject,
             runtime="python3.12",
             options=options,
+            **kwargs,
         )
+
+    @parameterized.expand([(True,), (False,)])
+    def test_install_project_goes_to_artifacts_on_every_build(self, download_dependencies):
+        workflow = self._workflow(
+            {"uv_install_project": True}, dependencies_dir="deps", download_dependencies=download_dependencies
+        )
+        # After the dependencies are copied, so a reused dependencies_dir never supplies the project code
+        self.assertIsInstance(workflow.actions[-3], CopyDependenciesAction)
+        install = workflow.actions[-2]
+        self.assertIsInstance(install, PythonUvInstallProjectAction)
+        self.assertEqual(install.artifacts_dir, "artifacts")
+        self.assertTrue(install.config.install_project)
+        self.assertIsInstance(workflow.actions[-1], CopySourceAction)
+
+    def test_no_install_project_action_by_default(self):
+        workflow = self._workflow({"uv_groups": ["lambda"]})
+        self.assertFalse(any(isinstance(a, PythonUvInstallProjectAction) for a in workflow.actions))
 
     def test_options_are_passed_to_the_build_action(self):
         workflow = self._workflow(

@@ -349,26 +349,29 @@ class TestPythonUvDependencyBuilder(TestCase):
         self.builder._build_from_lock_file("/path/to/uv.lock", "/target", "/scratch", "3.9", X86_64, config)
 
         export_args = self.mock_uv_runner._uv.run_uv_command.call_args_list[0].args[0]
-        # The project is installed on its own, after its dependencies
+        # The project is installed on its own, by install_project
         self.assertIn("--no-emit-project", export_args)
         self.assertIn("--no-editable", export_args)
         self.assertEqual(export_args[export_args.index("--group") + 1], "lambda")
         self.assertEqual(export_args[export_args.index("--extra") + 1], "fast")
+        self.mock_uv_runner.install_project.assert_not_called()
+
+    def test_install_project(self):
+        self.mock_uv_runner._uv.run_uv_command.return_value = (0, "/workspace\n", "")
+        config = UvConfig(install_project=True)
+
+        self.builder.install_project("/path/to/pyproject.toml", "/artifacts", "/scratch", X86_64, config)
+
         self.mock_uv_runner.install_project.assert_called_once_with(
             project_dir="/path/to",
             build_dir=os.path.abspath(os.path.join("/scratch", "project-build")),
-            target_dir="/target",
+            target_dir="/artifacts",
             config=config,
             python_version="3.9",
             platform="linux",
             architecture=X86_64,
             cwd="/workspace",
         )
-
-    def test_build_from_lock_file_skips_project_by_default(self):
-        self.mock_uv_runner._uv.run_uv_command.side_effect = [(0, "", ""), (0, "/workspace\n", "")]
-        self.builder._build_from_lock_file("/path/to/uv.lock", "/target", "/scratch", "3.9", X86_64, UvConfig())
-        self.mock_uv_runner.install_project.assert_not_called()
 
     def test_build_from_lock_file_prunes_locked_packages(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,7 +9,7 @@ from aws_lambda_builders.actions import CleanUpAction, CopyDependenciesAction, C
 from aws_lambda_builders.exceptions import WorkflowFailedError
 from aws_lambda_builders.workflow import BaseWorkflow, BuildDirectory, BuildInSourceSupport, Capability
 
-from .actions import PythonUvBuildAction
+from .actions import PythonUvBuildAction, PythonUvInstallProjectAction
 from .utils import OSUtils, UvConfig, detect_uv_manifest
 
 LOG = logging.getLogger(__name__)
@@ -234,6 +234,20 @@ class PythonUvWorkflow(BaseWorkflow):
                     artifact_dir=self.dependencies_dir,
                     destination_dir=artifacts_dir,
                     maintain_symlinks=False,
+                )
+            )
+
+        # The project is the function's own code, so it goes into artifacts_dir on every build,
+        # even when dependencies are reused from dependencies_dir (download_dependencies=False).
+        if config and config.install_project:
+            self.actions.append(
+                PythonUvInstallProjectAction(
+                    artifacts_dir,
+                    scratch_dir,
+                    manifest_path,
+                    runtime,
+                    architecture=self.architecture,
+                    config=config,
                 )
             )
 

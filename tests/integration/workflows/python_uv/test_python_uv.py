@@ -617,6 +617,47 @@ class TestPythonUvWorkflow(TestCase):
         self.assertTrue(artifacts.joinpath("optsapp-0.1.0.dist-info").is_dir())
         self.assertEqual(list(artifacts.rglob("*.pth")), [])
 
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_install_project_ships_new_code_when_dependencies_are_reused(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            pathlib.Path(source_dir, "pyproject.toml").write_text(
+                '[project]\nname = "incapp"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+                'dependencies = ["six==1.16.0"]\n\n'
+                '[build-system]\nrequires = ["uv_build>=0.8,<1"]\nbuild-backend = "uv_build"\n'
+            )
+            module = pathlib.Path(source_dir, "src", "incapp", "__init__.py")
+            module.parent.mkdir(parents=True)
+            module.write_text("VALUE = 1\n")
+            builder = LambdaBuilder(language="python", dependency_manager="uv", application_framework=None)
+
+            def build(download_dependencies):
+                # Like sam build --cached: a fresh artifacts dir, dependencies kept in dependencies_dir
+                shutil.rmtree(self.artifacts_dir)
+                os.mkdir(self.artifacts_dir)
+                builder.build(
+                    source_dir,
+                    self.artifacts_dir,
+                    self.scratch_dir,
+                    os.path.join(source_dir, "pyproject.toml"),
+                    runtime=f"python{sys.version_info.major}.{sys.version_info.minor}",
+                    experimental_flags=self.experimental_flags,
+                    options={"uv_install_project": True},
+                    dependencies_dir=self.dependencies_dir,
+                    download_dependencies=download_dependencies,
+                    combine_dependencies=True,
+                )
+
+            build(download_dependencies=True)
+            module.write_text("VALUE = 2\n")
+            build(download_dependencies=False)
+
+        artifacts = pathlib.Path(self.artifacts_dir)
+        self.assertEqual(artifacts.joinpath("incapp", "__init__.py").read_text(), "VALUE = 2\n")
+        self.assertTrue(artifacts.joinpath("six.py").is_file())
+        # Only dependencies are kept for reuse; the project is never a stale copy from there
+        self.assertTrue(pathlib.Path(self.dependencies_dir, "six.py").is_file())
+        self.assertEqual(list(pathlib.Path(self.dependencies_dir).glob("incapp*")), [])
+
     @parameterized.expand(
         [
             # uv falls back to a legacy setuptools build when [build-system] is missing

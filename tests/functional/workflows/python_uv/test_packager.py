@@ -660,7 +660,7 @@ version = "4.2.0"
         assert "certifi" in installed_packages
 
     def test_lock_export_uses_build_options(self, tmpdir, uv_runner, osutils):
-        """Build options select groups and extras; the project is installed after its dependencies"""
+        """Build options select groups and extras; install_project installs the project on its own"""
         fake_uv, runner = uv_runner
         appdir, builder, manifest_path = self._make_appdir_and_dependency_builder(
             ["six"], tmpdir, runner, manifest_type="pyproject"
@@ -677,6 +677,7 @@ version = "4.2.0"
                 architecture=X86_64,
                 config=config,
             )
+            builder.install_project(manifest_path, os.path.join(appdir, "artifacts"), scratch_dir, X86_64, config)
 
         export_args = fake_uv._calls["export"][0][0]
         assert "--no-emit-project" in export_args
