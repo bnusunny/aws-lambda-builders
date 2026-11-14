@@ -2,9 +2,12 @@
 UV-based Python dependency packager for AWS Lambda
 """
 
+import csv
+import filecmp
 import logging
 import os
 import re
+import shutil
 from typing import Dict, List, Optional, Set
 
 from aws_lambda_builders.architecture import ARM64, X86_64
@@ -13,6 +16,105 @@ from .exceptions import LockFileError, MissingUvError, UvBuildError, UvInstallat
 from .utils import OSUtils, UvConfig
 
 LOG = logging.getLogger(__name__)
+
+
+def project_name(project_dir: str) -> Optional[str]:
+    """The [project] name in project_dir/pyproject.toml, or None when it is missing or unreadable."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
+
+    try:
+        with open(os.path.join(project_dir, "pyproject.toml"), "rb") as pyproject_file:
+            project = tomllib.load(pyproject_file).get("project")
+    except (OSError, ValueError):
+        return None
+    name = project.get("name") if isinstance(project, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def installed_source_copies(source_dir: str, target_dir: str, name: str, excludes=()) -> Set[str]:
+    """Source paths that the project install already put into target_dir, byte for byte.
+
+    In a src layout, copying the source dir would ship the package a second time as src/<pkg>,
+    which Lambda never imports. Only a package or module one directory below source_dir, found in
+    exactly one place, whose every (non-excluded) file was installed unchanged, is returned, plus
+    its parent dir when nothing else is left in it. Anything else (flat layout, files the wheel
+    left out, symlinks, no RECORD) keeps the full copy.
+    """
+    ignore = shutil.ignore_patterns(*excludes)
+    normalized = re.sub(r"[-_.]+", "_", name).lower()
+    records = [
+        os.path.join(target_dir, entry, "RECORD")
+        for entry in os.listdir(target_dir)
+        if entry.endswith(".dist-info") and re.sub(r"[-_.]+", "_", entry.split("-")[0]).lower() == normalized
+    ]
+    if len(records) != 1:
+        LOG.debug("Copying the whole source dir: found %d dist-info dirs for %s", len(records), name)
+        return set()
+    try:
+        with open(records[0], newline="", encoding="utf-8") as record_file:
+            rows = list(csv.reader(record_file))
+    except OSError as ex:
+        LOG.debug("Copying the whole source dir: cannot read %s: %s", records[0], ex)
+        return set()
+
+    installed: Dict[str, Set[str]] = {}
+    for row in rows:
+        parts = row[0].split("/") if row and row[0] else []
+        if not parts or parts[0] in ("", "..") or ".." in parts or "__pycache__" in parts:
+            continue
+        if parts[0].endswith((".dist-info", ".data")):
+            continue
+        installed.setdefault(parts[0], set()).add(row[0])
+
+    copies = set()
+    for top, paths in installed.items():
+        if os.path.lexists(os.path.join(source_dir, top)):
+            continue  # flat layout: keep copying it, as without uv_install_project
+        candidates = [
+            os.path.join(source_dir, entry, top)
+            for entry in sorted(os.listdir(source_dir))
+            if entry not in ignore(source_dir, [entry])
+            and os.path.isdir(os.path.join(source_dir, entry))
+            and not os.path.islink(os.path.join(source_dir, entry))
+            and os.path.lexists(os.path.join(source_dir, entry, top))
+        ]
+        if len(candidates) == 1 and _installed_unchanged(candidates[0], paths, target_dir, ignore):
+            copies.add(candidates[0])
+        else:
+            LOG.debug("Copying the source of %s: cannot match it to one installed copy", top)
+
+    for parent in {os.path.dirname(path) for path in copies}:
+        names = os.listdir(parent)
+        ignored = ignore(parent, names)
+        if all(os.path.join(parent, entry) in copies for entry in names if entry not in ignored):
+            copies.add(parent)
+    return copies
+
+
+def _installed_unchanged(source_path: str, installed_paths: Set[str], target_dir: str, ignore) -> bool:
+    """Whether every source file under source_path was installed, unchanged, as one of installed_paths."""
+    if os.path.islink(source_path):
+        return False
+    files = []
+    if os.path.isfile(source_path):
+        files.append(source_path)
+    else:
+        for directory, dirnames, filenames in os.walk(source_path):
+            ignored = ignore(directory, dirnames + filenames)
+            kept = [entry for entry in dirnames + filenames if entry not in ignored]
+            if any(os.path.islink(os.path.join(directory, entry)) for entry in kept):
+                return False
+            dirnames[:] = [entry for entry in dirnames if entry not in ignored]
+            files.extend(os.path.join(directory, entry) for entry in filenames if entry not in ignored)
+    root = os.path.dirname(source_path)
+    for file in files:
+        relative = os.path.relpath(file, root).replace(os.sep, "/")
+        if relative not in installed_paths or not filecmp.cmp(file, os.path.join(target_dir, relative), False):
+            return False
+    return True
 
 
 class SubprocessUv:
@@ -198,18 +300,8 @@ class UvRunner:
         --reinstall, used when pyproject.toml has no project name, also revalidates cached build
         dependencies such as setuptools, so it is only the fallback.
         """
-        try:
-            import tomllib
-        except ModuleNotFoundError:  # Python 3.10
-            import tomli as tomllib
-
-        try:
-            with open(os.path.join(project_dir, "pyproject.toml"), "rb") as pyproject_file:
-                project = tomllib.load(pyproject_file).get("project")
-        except (OSError, ValueError):
-            project = None
-        name = project.get("name") if isinstance(project, dict) else None
-        return ["--reinstall-package", name] if isinstance(name, str) and name else ["--reinstall"]
+        name = project_name(project_dir)
+        return ["--reinstall-package", name] if name else ["--reinstall"]
 
     def _pip_install(
         self,

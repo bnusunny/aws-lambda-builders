@@ -9,7 +9,7 @@ from aws_lambda_builders.actions import CleanUpAction, CopyDependenciesAction, C
 from aws_lambda_builders.exceptions import WorkflowFailedError
 from aws_lambda_builders.workflow import BaseWorkflow, BuildDirectory, BuildInSourceSupport, Capability
 
-from .actions import PythonUvBuildAction, PythonUvInstallProjectAction
+from .actions import PythonUvBuildAction, PythonUvCopySourceAction, PythonUvInstallProjectAction
 from .utils import OSUtils, UvConfig, detect_uv_manifest
 
 LOG = logging.getLogger(__name__)
@@ -239,20 +239,24 @@ class PythonUvWorkflow(BaseWorkflow):
 
         # The project is the function's own code, so it goes into artifacts_dir on every build,
         # even when dependencies are reused from dependencies_dir (download_dependencies=False).
+        copy_source = CopySourceAction(source_dir, artifacts_dir, excludes=self.EXCLUDED_FILES)
         if config and config.install_project:
-            self.actions.append(
-                PythonUvInstallProjectAction(
-                    artifacts_dir,
-                    scratch_dir,
-                    manifest_path,
-                    runtime,
-                    architecture=self.architecture,
-                    config=config,
-                )
+            install_project = PythonUvInstallProjectAction(
+                artifacts_dir,
+                scratch_dir,
+                manifest_path,
+                runtime,
+                architecture=self.architecture,
+                config=config,
+                source_dir=source_dir,
+                excludes=self.EXCLUDED_FILES,
             )
+            self.actions.append(install_project)
+            # Leave out a src-layout copy of the project that was just installed
+            copy_source = PythonUvCopySourceAction(source_dir, artifacts_dir, self.EXCLUDED_FILES, install_project)
 
         # Always copy source code (final step)
-        self.actions.append(CopySourceAction(source_dir, artifacts_dir, excludes=self.EXCLUDED_FILES))
+        self.actions.append(copy_source)
 
     def get_resolvers(self):
         """

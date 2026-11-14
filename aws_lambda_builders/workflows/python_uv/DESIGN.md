@@ -241,6 +241,12 @@ It installs only the project, because setuptools packs everything under its buil
 The project is the function's own code, so a separate `InstallProject` action installs it straight into the
 artifacts dir on every build, after any dependencies are copied there. It never goes into `dependencies_dir`,
 whose contents incremental builds (`download_dependencies=False`) reuse.
+The source copy then leaves out what that install already shipped, so a src layout does not ship the
+package twice (`<pkg>/`, which Lambda imports, and a dead `src/<pkg>/`). From the project's `RECORD`, a
+top-level package or module is left out only when it sits one directory below the source dir in exactly
+one place and every non-excluded file in it was installed unchanged; that parent dir is left out too when
+nothing else is in it. Anything else (a flat layout, a file the wheel left out, a symlink, a manifest
+outside the source dir, no project name) copies the whole source dir as before.
 `uv_prune` is meant for packages the Lambda runtime already ships, such as `boto3`. The function then
 uses the runtime's version, which AWS picks, not the version in `uv.lock`.
 The build fails with a clear message, instead of ignoring the option, when:

@@ -14,7 +14,12 @@ from aws_lambda_builders.workflows.python_uv.exceptions import (
     UvBuildError,
     UvInstallationError,
 )
-from aws_lambda_builders.workflows.python_uv.packager import PythonUvDependencyBuilder, SubprocessUv, UvRunner
+from aws_lambda_builders.workflows.python_uv.packager import (
+    PythonUvDependencyBuilder,
+    SubprocessUv,
+    UvRunner,
+    installed_source_copies,
+)
 from aws_lambda_builders.workflows.python_uv.utils import UvConfig
 
 
@@ -897,3 +902,70 @@ class TestPythonUvDependencyBuilder(TestCase):
         self.assertFalse(self.builder._is_requirements_file("requirements.txt.bak"))
         self.assertFalse(self.builder._is_requirements_file("requirements-"))
         self.assertFalse(self.builder._is_requirements_file("requirements-.txt"))
+
+
+class TestInstalledSourceCopies(TestCase):
+    """Which source paths the project install already shipped, so the source copy can leave them out."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.source = os.path.join(self.tmp.name, "source")
+        self.target = os.path.join(self.tmp.name, "target")
+        os.makedirs(self.target)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, root, relative, text="x = 1\n"):
+        path = Path(root, relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def _install(self, files, dist_info="My_App-0.1.0.dist-info"):
+        for relative, text in files.items():
+            self._write(self.target, relative, text)
+        rows = "".join(f"{relative},," + "\n" for relative in files)
+        self._write(self.target, f"{dist_info}/RECORD", rows + f"{dist_info}/RECORD,,\n")
+
+    def _copies(self):
+        return {os.path.relpath(p, self.source) for p in installed_source_copies(self.source, self.target, "my-app")}
+
+    def test_src_layout_package_and_its_emptied_parent(self):
+        self._write(self.source, "src/app/__init__.py")
+        self._write(self.source, "src/app/__pycache__/x.cpython-312.pyc", "compiled")
+        self._write(self.source, "handler.py")
+        self._install({"app/__init__.py": "x = 1\n", "app/_version.py": "generated\n"})
+        excluded = installed_source_copies(self.source, self.target, "my-app", excludes=("__pycache__",))
+        self.assertEqual({os.path.relpath(p, self.source) for p in excluded}, {"src", os.path.join("src", "app")})
+
+    def test_src_layout_module_keeps_parent_with_other_files(self):
+        self._write(self.source, "src/app.py")
+        self._write(self.source, "src/notes.txt")
+        self._install({"app.py": "x = 1\n"})
+        self.assertEqual(self._copies(), {os.path.join("src", "app.py")})
+
+    @parameterized.expand(
+        [
+            ("flat_layout", {"app/__init__.py": "x = 1\n"}),
+            ("file_not_in_wheel", {"src/app/__init__.py": "x = 1\n", "src/app/data.txt": "d"}),
+            ("content_differs", {"src/app/__init__.py": "x = 2\n"}),
+            ("two_candidates", {"src/app/__init__.py": "x = 1\n", "lib/app/__init__.py": "x = 1\n"}),
+        ]
+    )
+    def test_keeps_the_copy_when_unsure(self, _name, source_files):
+        for relative, text in source_files.items():
+            self._write(self.source, relative, text)
+        self._install({"app/__init__.py": "x = 1\n"})
+        self.assertEqual(self._copies(), set())
+
+    def test_no_matching_dist_info(self):
+        self._write(self.source, "src/app/__init__.py")
+        self._install({"app/__init__.py": "x = 1\n"}, dist_info="other-0.1.0.dist-info")
+        self.assertEqual(self._copies(), set())
+
+    def test_symlink_in_package(self):
+        self._write(self.source, "src/app/__init__.py")
+        self._write(self.tmp.name, "outside/mod.py")
+        os.symlink(os.path.join(self.tmp.name, "outside"), os.path.join(self.source, "src", "app", "linked"))
+        self._install({"app/__init__.py": "x = 1\n"})
+        self.assertEqual(self._copies(), set())

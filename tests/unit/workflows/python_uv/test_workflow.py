@@ -8,7 +8,11 @@ from parameterized import parameterized, parameterized_class
 
 from aws_lambda_builders.actions import CleanUpAction, CopyDependenciesAction, CopySourceAction
 from aws_lambda_builders.exceptions import WorkflowFailedError
-from aws_lambda_builders.workflows.python_uv.actions import PythonUvBuildAction, PythonUvInstallProjectAction
+from aws_lambda_builders.workflows.python_uv.actions import (
+    PythonUvBuildAction,
+    PythonUvCopySourceAction,
+    PythonUvInstallProjectAction,
+)
 from aws_lambda_builders.workflows.python_uv.utils import EXPERIMENTAL_FLAG_BUILD_PERFORMANCE, OSUtils
 from aws_lambda_builders.workflows.python_uv.workflow import PythonUvWorkflow
 
@@ -230,7 +234,10 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
         self.assertIsInstance(install, PythonUvInstallProjectAction)
         self.assertEqual(install.artifacts_dir, "artifacts")
         self.assertTrue(install.config.install_project)
-        self.assertIsInstance(workflow.actions[-1], CopySourceAction)
+        self.assertEqual(install.source_dir, self.source_dir)
+        # The source copy leaves out what this install already shipped
+        self.assertIsInstance(workflow.actions[-1], PythonUvCopySourceAction)
+        self.assertIs(workflow.actions[-1]._install_action, install)
 
     def test_no_install_project_action_by_default(self):
         workflow = self._workflow({"uv_groups": ["lambda"]})

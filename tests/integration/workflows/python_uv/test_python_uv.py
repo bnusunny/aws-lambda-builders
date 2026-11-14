@@ -657,6 +657,64 @@ class TestPythonUvWorkflow(TestCase):
         # Only dependencies are kept for reuse; the project is never a stale copy from there
         self.assertTrue(pathlib.Path(self.dependencies_dir, "six.py").is_file())
         self.assertEqual(list(pathlib.Path(self.dependencies_dir).glob("incapp*")), [])
+        # The source copy of the installed package is left out on the incremental build too
+        self.assertFalse(artifacts.joinpath("src").exists())
+
+    def _build_project(self, source_dir, build_system):
+        pathlib.Path(source_dir, "pyproject.toml").write_text(
+            '[project]\nname = "dupapp"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n\n' + build_system
+        )
+        pathlib.Path(source_dir, "app.py").write_text("from dupapp import VALUE\n")
+        pathlib.Path(source_dir, "config").mkdir()
+        pathlib.Path(source_dir, "config", "settings.json").write_text("{}\n")
+        LambdaBuilder(language="python", dependency_manager="uv", application_framework=None).build(
+            source_dir,
+            self.artifacts_dir,
+            self.scratch_dir,
+            os.path.join(source_dir, "pyproject.toml"),
+            runtime=f"python{sys.version_info.major}.{sys.version_info.minor}",
+            experimental_flags=self.experimental_flags,
+            options={"uv_install_project": True},
+        )
+        return pathlib.Path(self.artifacts_dir)
+
+    @parameterized.expand([("only_package", False), ("other_files_in_src", True)])
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_install_project_leaves_out_src_layout_copy(self, _name, extra_src_file):
+        with tempfile.TemporaryDirectory() as source_dir:
+            package = pathlib.Path(source_dir, "src", "dupapp")
+            package.mkdir(parents=True)
+            package.joinpath("__init__.py").write_text("VALUE = 1\n")
+            if extra_src_file:
+                pathlib.Path(source_dir, "src", "notes.txt").write_text("not packaged\n")
+            artifacts = self._build_project(
+                source_dir, '[build-system]\nrequires = ["uv_build>=0.8,<1"]\nbuild-backend = "uv_build"\n'
+            )
+
+        self.assertEqual(artifacts.joinpath("dupapp", "__init__.py").read_text(), "VALUE = 1\n")
+        self.assertFalse(artifacts.joinpath("src", "dupapp").exists())
+        # Everything that is not the installed package is still copied
+        self.assertTrue(artifacts.joinpath("app.py").is_file())
+        self.assertTrue(artifacts.joinpath("config", "settings.json").is_file())
+        self.assertEqual(artifacts.joinpath("src", "notes.txt").is_file(), extra_src_file)
+        self.assertEqual(artifacts.joinpath("src").exists(), extra_src_file)
+
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_install_project_keeps_flat_layout_source(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            package = pathlib.Path(source_dir, "dupapp")
+            package.mkdir()
+            package.joinpath("__init__.py").write_text("VALUE = 1\n")
+            package.joinpath("data.txt").write_text("not in the wheel\n")
+            artifacts = self._build_project(
+                source_dir,
+                '[build-system]\nrequires = ["setuptools>=68"]\nbuild-backend = "setuptools.build_meta"\n'
+                '[tool.setuptools]\npackages = ["dupapp"]\n',
+            )
+
+        self.assertTrue(artifacts.joinpath("dupapp-0.1.0.dist-info").is_dir())
+        for kept in ("app.py", "config/settings.json", "dupapp/__init__.py", "dupapp/data.txt"):
+            self.assertTrue(artifacts.joinpath(kept).is_file(), kept)
 
     @parameterized.expand(
         [
