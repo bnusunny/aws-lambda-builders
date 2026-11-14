@@ -1,3 +1,4 @@
+import configparser
 import os
 import tempfile
 from pathlib import Path
@@ -287,6 +288,19 @@ class TestUvRunner(TestCase):
                 Path(env["DIST_EXTRA_CONFIG"]).read_text(encoding="utf-8"),
                 f"[build]\nbuild_base = {os.path.join(build_dir, 'build')}\n[egg_info]\negg_base = {build_dir}\n",
             )
+
+    def test_install_project_config_survives_percent_in_path(self):
+        self.mock_subprocess_uv.run_uv_command.return_value = (0, "", "")
+        self.mock_osutils.original_environ.return_value = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = os.path.join(tmp, "100% %(here)s")
+            self.uv_runner.install_project(project_dir="/src/app", build_dir=build_dir, target_dir="/target")
+
+            # setuptools parses DIST_EXTRA_CONFIG with an interpolating ConfigParser
+            parser = configparser.ConfigParser()
+            parser.read(self.mock_subprocess_uv.run_uv_command.call_args.kwargs["env"]["DIST_EXTRA_CONFIG"])
+            self.assertEqual(parser.get("build", "build_base"), os.path.join(build_dir, "build"))
+            self.assertEqual(parser.get("egg_info", "egg_base"), build_dir)
 
     @parameterized.expand(
         [

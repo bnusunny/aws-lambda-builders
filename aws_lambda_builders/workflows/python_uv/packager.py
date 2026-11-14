@@ -171,9 +171,11 @@ class UvRunner:
         """
         os.makedirs(build_dir, exist_ok=True)
         config_path = os.path.join(build_dir, "setup.cfg")
+        # setuptools reads this file with configparser interpolation, so a literal % must be %%
+        escaped_dir = build_dir.replace("%", "%%")
         with open(config_path, "w", encoding="utf-8") as config_file:
             config_file.write(
-                f"[build]\nbuild_base = {os.path.join(build_dir, 'build')}\n[egg_info]\negg_base = {build_dir}\n"
+                f"[build]\nbuild_base = {os.path.join(escaped_dir, 'build')}\n[egg_info]\negg_base = {escaped_dir}\n"
             )
         env = dict(self._osutils.original_environ(), DIST_EXTRA_CONFIG=config_path)
         self._pip_install(
