@@ -5,7 +5,7 @@ UV-based Python dependency packager for AWS Lambda
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from aws_lambda_builders.architecture import ARM64, X86_64
 
@@ -23,6 +23,7 @@ class SubprocessUv:
             osutils = OSUtils()
         self._osutils = osutils
         self._uv_executable = self._find_uv_executable()
+        self._warnings_seen: Set[str] = set()
 
     def _find_uv_executable(self) -> str:
         """Find UV executable in PATH."""
@@ -75,8 +76,27 @@ class SubprocessUv:
         LOG.debug("UV command return code: %d", rc)
         LOG.debug("UV stdout: %s", stdout)
         LOG.debug("UV stderr: %s", stderr)
+        self._log_warnings(stderr)
 
         return rc, stdout, stderr
+
+    def _log_warnings(self, stderr: Optional[str]) -> None:
+        """Log each `warning:` block uv prints, once per build; uv repeats some on every command."""
+        blocks: List[List[str]] = []
+        current = None
+        for line in (stderr or "").splitlines():
+            if line.startswith("warning:"):
+                current = [line]
+                blocks.append(current)
+            elif current is not None and line[:1] in (" ", "\t"):
+                current.append(line)  # uv indents a warning's continuation lines
+            else:
+                current = None
+        for block in blocks:
+            message = "\n".join(block)
+            if message not in self._warnings_seen:
+                self._warnings_seen.add(message)
+                LOG.warning("uv %s", message)
 
 
 class UvRunner:

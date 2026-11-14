@@ -650,3 +650,28 @@ class TestPythonUvWorkflow(TestCase):
                     options={"uv_prune": ["not-a-locked-package"]},
                 )
             self.assertIn("uv_prune names packages not in", str(ctx.exception))
+
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_shows_uv_warnings(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            # An unknown [tool.uv] key makes uv ignore every setting in the file; only a warning says so
+            pathlib.Path(source_dir, "pyproject.toml").write_text(
+                '[project]\nname = "warnapp"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+                'dependencies = ["six==1.16.0"]\n\n[tool.uv]\nbogus-key = true\n'
+            )
+            with self.assertLogs("aws_lambda_builders.workflows.python_uv.packager", level="WARNING") as logs:
+                LambdaBuilder(language="python", dependency_manager="uv", application_framework=None).build(
+                    source_dir,
+                    self.artifacts_dir,
+                    self.scratch_dir,
+                    os.path.join(source_dir, "pyproject.toml"),
+                    runtime=f"python{sys.version_info.major}.{sys.version_info.minor}",
+                    experimental_flags=self.experimental_flags,
+                )
+
+        warnings = [record.getMessage() for record in logs.records if "bogus-key" in record.getMessage()]
+        # uv repeats it on lock, export and install; the build shows it once
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertTrue(warnings[0].startswith("uv warning: Failed to parse `pyproject.toml`"), warnings[0])
+        self.assertIn("unknown field `bogus-key`", warnings[0])
+        self.assertIn("six.py", os.listdir(self.artifacts_dir))

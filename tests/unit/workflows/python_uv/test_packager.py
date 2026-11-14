@@ -77,6 +77,47 @@ class TestSubprocessUv(TestCase):
         mock_osutils.run_subprocess.assert_called_once_with([windows_uv_path, "--version"], cwd=None, env=None)
 
     @patch("aws_lambda_builders.workflows.python_uv.packager.OSUtils")
+    def test_run_uv_command_logs_uv_warnings_once(self, mock_osutils_class):
+        mock_osutils = Mock()
+        mock_osutils.which.return_value = "/usr/bin/uv"
+        stderr = (
+            "warning: Failed to parse `pyproject.toml` during settings discovery:\n"
+            "  unknown field `bogus`\n"
+            "\n"
+            "Resolved 2 packages in 1ms\n"
+            "  indented progress line\n"
+            "warning: second\n"
+            "error: not a warning\n"
+        )
+        mock_osutils.run_subprocess.side_effect = [(0, "", stderr), (2, "", stderr)]
+        mock_osutils_class.return_value = mock_osutils
+
+        subprocess_uv = SubprocessUv()
+        with self.assertLogs("aws_lambda_builders.workflows.python_uv.packager", level="WARNING") as logs:
+            subprocess_uv.run_uv_command(["lock"])
+            rc, _, returned_stderr = subprocess_uv.run_uv_command(["export"])
+
+        self.assertEqual(
+            [record.getMessage() for record in logs.records],
+            [
+                "uv warning: Failed to parse `pyproject.toml` during settings discovery:\n  unknown field `bogus`",
+                "uv warning: second",
+            ],
+        )
+        self.assertEqual((rc, returned_stderr), (2, stderr))
+
+    @patch("aws_lambda_builders.workflows.python_uv.packager.OSUtils")
+    def test_run_uv_command_without_warnings_logs_none(self, mock_osutils_class):
+        mock_osutils = Mock()
+        mock_osutils.which.return_value = "/usr/bin/uv"
+        mock_osutils.run_subprocess.return_value = (0, "", "Resolved 1 package\n  warning: indented, not uv's\n")
+        mock_osutils_class.return_value = mock_osutils
+
+        with patch("aws_lambda_builders.workflows.python_uv.packager.LOG") as mock_log:
+            SubprocessUv().run_uv_command(["lock"])
+        mock_log.warning.assert_not_called()
+
+    @patch("aws_lambda_builders.workflows.python_uv.packager.OSUtils")
     def test_get_uv_version_success(self, mock_osutils_class):
         mock_osutils = Mock()
         mock_osutils.which.return_value = "/usr/bin/uv"
