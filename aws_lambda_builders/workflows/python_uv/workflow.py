@@ -143,7 +143,8 @@ class PythonUvWorkflow(BaseWorkflow):
         self._setup_build_actions(source_dir, artifacts_dir, scratch_dir, manifest_path, runtime, config)
 
     def _fail(self, reason):
-        raise WorkflowFailedError(workflow_name=self.NAME, action_name=None, reason=reason)
+        # Same action name BaseWorkflow uses for runtime validation errors
+        raise WorkflowFailedError(workflow_name=self.NAME, action_name="Validation", reason=reason)
 
     def _uv_config_from_options(self, manifest_path):
         """Build the UvConfig from the uv_* build options, rejecting anything invalid."""

@@ -255,6 +255,7 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
     def test_invalid_options_fail(self, options, message):
         with self.assertRaises(WorkflowFailedError) as ctx:
             self._workflow(options)
+        self.assertTrue(str(ctx.exception).startswith("PythonUvBuilder:Validation - "), str(ctx.exception))
         self.assertIn(message, str(ctx.exception))
 
     def test_options_on_requirements_build_fail(self):
