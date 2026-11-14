@@ -429,6 +429,28 @@ class PythonUvDependencyBuilder:
             args.extend(["--exclude-newer-package", f"{package}={value}"])
         return args
 
+    @staticmethod
+    def _check_prune_names(lock_path: str, prune: List[str]) -> None:
+        """Fail on prune names missing from the lock; `uv export --prune` ignores them silently."""
+        if not prune:
+            return
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10
+            import tomli as tomllib
+
+        try:
+            with open(lock_path, "rb") as lock_file:
+                packages = tomllib.load(lock_file).get("package", [])
+        except FileNotFoundError:
+            # Leave missing-lock diagnostics to UV.
+            return
+
+        locked = {package.get("name") for package in packages if isinstance(package, dict)}
+        missing = [name for name in prune if re.sub(r"[-_.]+", "-", name).lower() not in locked]
+        if missing:
+            raise LockFileError(reason=f"Build option uv_prune names packages not in {lock_path}: {', '.join(missing)}")
+
     def _build_from_lock_file(
         self,
         lock_path: str,
@@ -451,6 +473,7 @@ class PythonUvDependencyBuilder:
         try:
             if project_dir is None:
                 project_dir = os.path.dirname(lock_path)
+            self._check_prune_names(lock_path, config.prune)
 
             # Export lock file to requirements.txt for platform-specific install
             # Export and install may run from different directories in a workspace

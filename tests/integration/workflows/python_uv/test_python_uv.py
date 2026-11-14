@@ -616,3 +616,37 @@ class TestPythonUvWorkflow(TestCase):
         self.assertEqual(artifacts.joinpath("optsapp", "__init__.py").read_text(), "VALUE = 1\n")
         self.assertTrue(artifacts.joinpath("optsapp-0.1.0.dist-info").is_dir())
         self.assertEqual(list(artifacts.rglob("*.pth")), [])
+
+    @skipIf(which("uv") is None, "uv not available")
+    def test_workflow_prunes_runtime_provided_packages(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            pathlib.Path(source_dir, "pyproject.toml").write_text(
+                '[project]\nname = "pruneapp"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+                'dependencies = ["boto3==1.35.0", "requests==2.32.3"]\n'
+            )
+            builder = LambdaBuilder(language="python", dependency_manager="uv", application_framework=None)
+            build_args = (source_dir, self.artifacts_dir, self.scratch_dir, os.path.join(source_dir, "pyproject.toml"))
+            runtime = f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+            builder.build(
+                *build_args,
+                runtime=runtime,
+                experimental_flags=self.experimental_flags,
+                options={"uv_prune": ["boto3"]},
+            )
+
+            artifacts = pathlib.Path(self.artifacts_dir)
+            for pruned in ("boto3", "botocore", "s3transfer", "jmespath"):
+                self.assertEqual(list(artifacts.glob(f"{pruned}*")), [], pruned)
+            # urllib3 stays because requests also needs it
+            self.assertTrue(artifacts.joinpath("requests", "__init__.py").is_file())
+            self.assertTrue(artifacts.joinpath("urllib3", "__init__.py").is_file())
+
+            with self.assertRaises(WorkflowFailedError) as ctx:
+                builder.build(
+                    *build_args,
+                    runtime=runtime,
+                    experimental_flags=self.experimental_flags,
+                    options={"uv_prune": ["not-a-locked-package"]},
+                )
+            self.assertIn("uv_prune names packages not in", str(ctx.exception))

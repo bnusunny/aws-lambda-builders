@@ -7,7 +7,12 @@ from unittest.mock import Mock, mock_open, patch
 from parameterized import parameterized
 
 from aws_lambda_builders.architecture import ARM64, X86_64
-from aws_lambda_builders.workflows.python_uv.exceptions import MissingUvError, UvBuildError, UvInstallationError
+from aws_lambda_builders.workflows.python_uv.exceptions import (
+    LockFileError,
+    MissingUvError,
+    UvBuildError,
+    UvInstallationError,
+)
 from aws_lambda_builders.workflows.python_uv.packager import PythonUvDependencyBuilder, SubprocessUv, UvRunner
 from aws_lambda_builders.workflows.python_uv.utils import UvConfig
 
@@ -285,6 +290,34 @@ class TestPythonUvDependencyBuilder(TestCase):
         self.assertIn("--no-editable", export_args)
         self.assertEqual(export_args[export_args.index("--group") + 1], "lambda")
         self.assertEqual(export_args[export_args.index("--extra") + 1], "fast")
+
+    def test_build_from_lock_file_prunes_locked_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = os.path.join(tmp, "uv.lock")
+            Path(lock_path).write_text(
+                'version = 1\n[[package]]\nname = "boto3"\n[[package]]\nname = "python-dateutil"\n'
+            )
+            self.mock_uv_runner._uv.run_uv_command.side_effect = [(0, "", ""), (0, tmp + "\n", "")]
+            config = UvConfig(prune=["Boto3", "python_dateutil"])
+
+            self.builder._build_from_lock_file(lock_path, "/target", "/scratch", "3.9", X86_64, config)
+
+            export_args = self.mock_uv_runner._uv.run_uv_command.call_args_list[0].args[0]
+            pruned = [export_args[i + 1] for i, arg in enumerate(export_args) if arg == "--prune"]
+            self.assertEqual(pruned, ["Boto3", "python_dateutil"])
+
+    def test_build_from_lock_file_rejects_prune_name_not_in_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = os.path.join(tmp, "uv.lock")
+            Path(lock_path).write_text('version = 1\n[[package]]\nname = "boto3"\n')
+            config = UvConfig(prune=["boto3", "botocor"])
+
+            with self.assertRaises(LockFileError) as ctx:
+                self.builder._build_from_lock_file(lock_path, "/target", "/scratch", "3.9", X86_64, config)
+
+            self.assertIn("uv_prune names packages not in", str(ctx.exception))
+            self.assertIn("botocor", str(ctx.exception))
+            self.mock_uv_runner._uv.run_uv_command.assert_not_called()
 
     @patch(
         "builtins.open",

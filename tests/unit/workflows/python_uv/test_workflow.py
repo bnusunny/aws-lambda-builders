@@ -225,6 +225,7 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
                 "uv_groups": ["lambda"],
                 "uv_extras": ["fast"],
                 "uv_install_project": True,
+                "uv_prune": ["boto3"],
             }
         )
         config = workflow.actions[0].config
@@ -232,6 +233,7 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
         self.assertEqual(config.extras, ["fast"])
         self.assertFalse(config.all_extras)
         self.assertTrue(config.install_project)
+        self.assertEqual(config.prune, ["boto3"])
 
     def test_no_options_keep_defaults(self):
         config = self._workflow(None).actions[0].config
@@ -244,6 +246,8 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
             ({"uv_groups": [""]}, "uv_groups must be a list of non-empty strings"),
             ({"uv_all_extras": "true"}, "uv_all_extras must be true or false"),
             ({"uv_install_project": 1}, "uv_install_project must be true or false"),
+            ({"uv_prune": "boto3"}, "uv_prune must be a list of non-empty strings"),
+            ({"uv_prune": [""]}, "uv_prune must be a list of non-empty strings"),
             ({"uv_group": ["lambda"]}, "Unknown uv build option(s): uv_group"),
             ({"uv_extras": ["x"], "uv_all_extras": True}, "uv_extras and uv_all_extras cannot be used together"),
         ]
@@ -261,6 +265,13 @@ class TestPythonUvWorkflowBuildOptions(TestCase):
         self.assertIn(
             "uv_groups need a pyproject.toml project, but this build uses requirements.txt", str(ctx.exception)
         )
+
+    def test_prune_on_requirements_build_fails(self):
+        requirements = os.path.join(self.source_dir, "requirements.txt")
+        open(requirements, "w").close()
+        with self.assertRaises(WorkflowFailedError) as ctx:
+            self._workflow({"uv_prune": ["boto3"]}, manifest=requirements)
+        self.assertIn("uv_prune need a pyproject.toml project", str(ctx.exception))
 
     def test_default_valued_options_on_requirements_build_are_allowed(self):
         requirements = os.path.join(self.source_dir, "requirements.txt")

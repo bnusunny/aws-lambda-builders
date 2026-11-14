@@ -140,6 +140,7 @@ class UvConfig:
         extras: Optional[List[str]] = None,
         all_extras: bool = False,
         install_project: bool = False,
+        prune: Optional[List[str]] = None,
     ):
         self.index_url = index_url
         self.extra_index_urls = extra_index_urls or []
@@ -154,6 +155,7 @@ class UvConfig:
         self.extras = extras or []
         self.all_extras = all_extras
         self.install_project = install_project
+        self.prune = prune or []
 
     def to_export_args(self) -> List[str]:
         """Convert the dependency selection to `uv export` arguments."""
@@ -164,6 +166,8 @@ class UvConfig:
             args.extend(["--extra", extra])
         if self.all_extras:
             args.append("--all-extras")
+        for package in self.prune:
+            args.extend(["--prune", package])
         return args
 
     def to_uv_args(self) -> List[str]:

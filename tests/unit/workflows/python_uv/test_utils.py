@@ -229,3 +229,8 @@ class TestUvConfig(TestCase):
         self.assertEqual(UvConfig(all_extras=True).to_export_args(), ["--no-emit-project", "--all-extras"])
         # Export selection flags must never leak into `uv pip install`
         self.assertEqual(config.to_uv_args(), [])
+
+    def test_uv_config_export_args_with_prune(self):
+        config = UvConfig(prune=["boto3", "botocore"])
+        self.assertEqual(config.to_export_args(), ["--no-emit-project", "--prune", "boto3", "--prune", "botocore"])
+        self.assertEqual(config.to_uv_args(), [])

@@ -20,6 +20,7 @@ UV_OPTIONS = {
     "uv_extras": list,
     "uv_all_extras": bool,
     "uv_install_project": bool,
+    "uv_prune": list,
 }
 
 
@@ -185,6 +186,7 @@ class PythonUvWorkflow(BaseWorkflow):
             extras=values.get("uv_extras"),
             all_extras=values.get("uv_all_extras", False),
             install_project=values.get("uv_install_project", False),
+            prune=values.get("uv_prune"),
         )
 
     def _setup_build_actions(self, source_dir, artifacts_dir, scratch_dir, manifest_path, runtime, config=None):

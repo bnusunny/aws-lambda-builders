@@ -231,14 +231,18 @@ SAM CLI maps them from `Metadata.BuildProperties`.
 | `uv_extras` | `UvExtras` | list of str | `--extra <name>` per entry |
 | `uv_all_extras` | `UvAllExtras` | bool | `--all-extras` |
 | `uv_install_project` | `UvInstallProject` | bool, default false | drops `--no-emit-project`, so the project is installed (non-editable) |
+| `uv_prune` | `UvPrune` | list of str | `--prune <name>` per entry: drops the package and any dependency only it needs |
 
 Default groups stay excluded (`--no-default-groups`); `uv_groups` adds groups on top of that.
+`uv_prune` is meant for packages the Lambda runtime already ships, such as `boto3`. The function then
+uses the runtime's version, which AWS picks, not the version in `uv.lock`.
 The build fails with a clear message, instead of ignoring the option, when:
 - a value has the wrong type, or an unknown `uv_*` key is given;
 - `uv_extras` and `uv_all_extras` are combined;
 - an option is set on a `requirements.txt` build (they apply only to pyproject.toml / uv.lock projects);
 - `uv_install_project` is set on a virtual project (no `[build-system]`, or `tool.uv.package = false`),
-  which `uv export` would otherwise silently leave out.
+  which `uv export` would otherwise silently leave out;
+- a `uv_prune` name is not a package in `uv.lock`, which `uv export --prune` would otherwise ignore.
 
 ### Caching
 
