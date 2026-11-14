@@ -244,6 +244,18 @@ The build fails with a clear message, instead of ignoring the option, when:
   which `uv export` would otherwise silently leave out;
 - a `uv_prune` name is not a package in `uv.lock`, which `uv export --prune` would otherwise ignore.
 
+### Settings from pyproject.toml
+
+The workflow runs `uv export` and `uv pip install` from the project, so uv reads its own settings there.
+Build-control settings in `[tool.uv]` (`no-build`, `no-build-package`, `no-binary`, `no-binary-package`) apply
+to both steps; `[tool.uv.pip]` settings (`no-build`, `no-binary`, `only-binary`) apply to the install. `UV_*`
+environment variables apply to every uv call. The workflow's own flags always win: the target platform and
+Python version come from the function's architecture and runtime, default groups are excluded, and nothing
+is installed editable. In a uv workspace only the workspace root's `pyproject.toml` settings are used; a
+member's `[tool.uv]` and `[tool.uv.pip]` tables are ignored. An unknown key in either table makes uv ignore
+every setting in that file. The build log shows uv's warning about it (the workflow logs every `warning:`
+that uv prints, once per build), so check the key names against uv's settings reference.
+
 ### Caching
 
 The workflow does not pass `--cache-dir` unless a caller supplies one, so UV uses its own
