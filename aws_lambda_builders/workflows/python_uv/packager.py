@@ -177,7 +177,7 @@ class UvRunner:
             )
         env = dict(self._osutils.original_environ(), DIST_EXTRA_CONFIG=config_path)
         self._pip_install(
-            ["--no-deps", os.path.abspath(project_dir)],
+            ["--no-deps", os.path.abspath(project_dir), *self._rebuild_args(project_dir)],
             target_dir,
             config,
             python_version,
@@ -186,6 +186,28 @@ class UvRunner:
             cwd,
             env=env,
         )
+
+    @staticmethod
+    def _rebuild_args(project_dir: str) -> List[str]:
+        """Make uv build the project afresh instead of reusing a wheel it cached from an earlier build.
+
+        uv's documented cache keys for a local directory are pyproject.toml/setup.py/setup.cfg, not the code
+        (uv 0.13 rebuilds anyway, but that is not a promise). --reinstall-package rebuilds only the project.
+        --reinstall, used when pyproject.toml has no project name, also revalidates cached build
+        dependencies such as setuptools, so it is only the fallback.
+        """
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10
+            import tomli as tomllib
+
+        try:
+            with open(os.path.join(project_dir, "pyproject.toml"), "rb") as pyproject_file:
+                project = tomllib.load(pyproject_file).get("project")
+        except (OSError, ValueError):
+            project = None
+        name = project.get("name") if isinstance(project, dict) else None
+        return ["--reinstall-package", name] if isinstance(name, str) and name else ["--reinstall"]
 
     def _pip_install(
         self,

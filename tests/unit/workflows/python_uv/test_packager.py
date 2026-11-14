@@ -288,6 +288,26 @@ class TestUvRunner(TestCase):
                 f"[build]\nbuild_base = {os.path.join(build_dir, 'build')}\n[egg_info]\negg_base = {build_dir}\n",
             )
 
+    @parameterized.expand(
+        [
+            ('[project]\nname = "My_App"\n', ["--reinstall-package", "My_App"]),
+            # No [project] name (e.g. a setup.py-only project): rebuild everything this call installs
+            ('[build-system]\nrequires = ["setuptools"]\n', ["--reinstall"]),
+            ("not toml [", ["--reinstall"]),
+            (None, ["--reinstall"]),
+        ]
+    )
+    def test_install_project_never_reuses_a_cached_project_wheel(self, pyproject, expected):
+        self.mock_subprocess_uv.run_uv_command.return_value = (0, "", "")
+        self.mock_osutils.original_environ.return_value = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            if pyproject is not None:
+                Path(tmp, "pyproject.toml").write_text(pyproject, encoding="utf-8")
+            self.uv_runner.install_project(project_dir=tmp, build_dir=os.path.join(tmp, "b"), target_dir="/t")
+
+        args = self.mock_subprocess_uv.run_uv_command.call_args.args[0]
+        self.assertEqual(args[2 : 4 + len(expected)], ["--no-deps", os.path.abspath(tmp), *expected])
+
 
 class TestPythonUvDependencyBuilder(TestCase):
     def setUp(self):
